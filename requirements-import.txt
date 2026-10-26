@@ -1,0 +1,7 @@
+# Optional: importing tables from PDFs and images (Python 3.10+). Without these the app works as before and
+# the import buttons say what to install.
+pypdfium2>=5.0              # opens and draws PDF pages
+camelot-py>=2.0             # tables from a PDF's text layer (ruling lines and text positions)
+pypdf>=6.0                  # tells an empty PDF from a damaged one
+pytesseract>=0.3.10         # OCR for screenshots and scanned pages (also needs the Tesseract program)
+opencv-python-headless>=4.8
