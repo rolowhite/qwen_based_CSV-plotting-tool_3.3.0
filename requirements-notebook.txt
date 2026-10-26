@@ -1,0 +1,4 @@
+# Optional: the Notebook's solution pages (Markdown + LaTeX shown in the browser with the bundled KaTeX).
+# Without these the Notebook still finds exercises; "Open solution" says what to install.
+markdown-it-py>=3.0         # Markdown -> HTML (3.x supports Python 3.8+)
+mdit-py-plugins>=0.4        # $...$ and $$...$$ kept as TeX for KaTeX

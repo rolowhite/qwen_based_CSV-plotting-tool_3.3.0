@@ -502,4 +502,28 @@ program for screenshots and scans (Windows: `winget install UB-Mannheim.Tesserac
 tesseract-ocr`). The starters install the Python packages into the app's own environment; they never install
 system programs.
 
+### Notebook: find a problem in your own solutions
+
+Click **Notebook** on the gallery. Use **Library ▾ › Add a solutions folder…** (or a single `.md` file) to point it
+at your worked solutions. It reads Markdown files with front matter (`book:`, `edition:`), `### Exercise N.M`
+headings, `**Problem:**` blocks and `✔ *Checker: …*` lines. The files are only read, never changed, and they stay
+on your computer.
+
+Open a picture or PDF of a problem, paste a screenshot, or type the problem. The text that was read appears in an
+editable box with its numbers highlighted: fix any misreads, then **Find in library** (**Ctrl+Enter**). On a PDF,
+pick the page and drag around one problem. The Notebook compares the words, the numbers and a leading exercise
+number such as "3.31":
+* **One clear winner:** it is shown, and the other two candidates stay in the list ("Not this one?").
+* **Close scores, or two problems that only share small numbers:** you pick, and it never guesses.
+* **A low best score:** you are told the problem is not in your library.
+
+**Open solution** shows the stored solution in your browser. The maths is drawn by the KaTeX 0.19.1 copy (MIT licence) in
+`plotstudio/assets/katex`, with no internet. "Exercise N.M" mentions are links, and every result carries its source
+and trust label: *verified ✔*, *checked, with a caution ⚠* or *no checker note*. **Wrong match** records the right
+exercise in `~/.csv_plot_studio/notebook/notebook_feedback.jsonl`, which is used to tune the matching.
+
+Needs `pip install -r requirements-notebook.txt` (markdown-it-py, Python 3.9+) for the solution pages. Reading
+pictures uses the same Tesseract as image import. Tesseract reads plain text, so check fractions and symbols in the
+box. Live solving of problems that are not in the library comes in a later version.
+
 

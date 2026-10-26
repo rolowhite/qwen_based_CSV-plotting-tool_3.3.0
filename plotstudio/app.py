@@ -31,6 +31,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from . import APP_NAME, fonts, settings  # noqa: E402
 from .core import activity  # noqa: E402
 from .profile_view import ProfilePage  # noqa: E402
+from .notebook_page import NotebookPage  # noqa: E402
 from .codegen import PlotError  # noqa: E402
 from .data import DELIMITERS, ENCODINGS, RowSettings, file_size_text, load_csv  # noqa: E402
 from .pdf_table_extractor import MAX_PDF_BYTES, PasswordNeeded, WrongPassword, extract_tables  # noqa: E402
@@ -113,8 +114,9 @@ class App(tk.Tk):
         self.loader = LoadPage(self.container, self)
         self.work = WorkspacePage(self.container, self)
         self.profile = ProfilePage(self.container, self)
+        self.notebook = NotebookPage(self.container, self)
         self.pages = {"gallery": self.gallery, "load": self.loader, "work": self.work,
-                      "profile": self.profile}
+                      "profile": self.profile, "notebook": self.notebook}
         for page in self.pages.values():
             page.grid(row=0, column=0, sticky="nsew")
         self.current = "gallery"
@@ -135,7 +137,8 @@ class App(tk.Tk):
         for seq in ("<Control-Return>", "<F5>"):
             self.bind_all(seq, lambda e: self.work.plot() if self.current == "work" else None)
         self.bind_all("<Control-o>", lambda e: self.open_dialog())
-        self.bind_all("<Control-Shift-V>", lambda e: self.loader.paste_image())
+        self.bind_all("<Control-Shift-V>", lambda e: (self.notebook if self.current == "notebook" else
+                                                      self.loader).paste_image())
 
         self.bind_all("<Control-s>", lambda e: self.work.plot_view.save_image() if self.current == "work" else None)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -361,6 +364,10 @@ class GalleryPage(ttk.Frame):
                      font=t.f["medium"] if i == 0 else t.f["base"]).pack(side="left", padx=(px(6), 0))
         theme_button(top, app).pack(side="right", anchor="n", padx=(px(8), 0))
         profile_button(top, app).pack(side="right", anchor="n", padx=(px(8), 0))
+        notebook = ttk.Button(top, text="Notebook", image=t.icon_states("file", 16), compound="left",
+                              style="Toggle.TButton", command=lambda: app.show("notebook"))
+        notebook.pack(side="right", anchor="n", padx=(px(8), 0))
+        Tooltip(notebook, "Find a statistics problem in your own worked solutions (photo, PDF or typed)")
         self.chip = tk.Frame(top, background=C["panel"])
         self.chip.pack(side="right", anchor="n")
 

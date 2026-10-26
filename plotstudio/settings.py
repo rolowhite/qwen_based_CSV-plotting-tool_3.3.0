@@ -25,6 +25,8 @@ DEFAULTS = {
     "recent_events": [],
     "datasets_seen": {},
     "graph_names": {},
+    "notebook_library": [],         # folders or .md files with worked solutions (only read)
+    "notebook_history": [],         # recent Notebook lookups: time, text, status, exercise
 }
 
 
