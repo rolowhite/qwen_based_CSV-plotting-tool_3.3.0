@@ -140,12 +140,15 @@ class Chat:
         return self._cancelled.is_set()
 
     def stream(self, model: str, messages: list, format=None, think: Optional[bool] = None,
-               options: Optional[dict] = None) -> Iterator[dict]:
-        """The reply's JSON chunks ({"message": {"content": ...}, "done": ...}) as they arrive."""
+               options: Optional[dict] = None, tools: Optional[list] = None) -> Iterator[dict]:
+        """The reply's JSON chunks ({"message": {"content": ..., "tool_calls": [...]}, "done": ...}) as they
+        arrive. `tools` are function schemas the model may call (it then sends message.tool_calls)."""
         payload = {"model": model, "messages": messages, "stream": True,
                    "options": options if options is not None else {"temperature": 0}}
         if format is not None:
             payload["format"] = format
+        if tools:
+            payload["tools"] = tools
         if think is not None:
             payload["think"] = think
         return self._post("/api/chat", payload, model)
