@@ -19,12 +19,15 @@ from .gemini import Gemini, GeminiError
 MAX_ROUNDS = 25
 REL = 1e-3                  # numbers this close are the same answer (0.6496 vs 0.65 is, 0.6 vs 0.65 isn't)
 OLLAMA_OPTIONS = {"temperature": 0, "num_ctx": 8192, "num_predict": 4096}     # a regression's steps are long
+BUSY_WAIT = 3.0             # s before the one retry of an overloaded Gemini model in the middle of a solve
+MAX_WAIT = 60.0             # s at most for a per-minute limit before that retry
 
 SYSTEM = """You are a statistics tutor writing a worked solution on a board.
 - Start with **Given:** and the facts the problem gives (briefly).
 - Name the method in one sentence, then show each step.
 - Get EVERY number by calling the calculate tool. Never do arithmetic in your head and never write a number that
-  calculate did not return or the problem did not give.
+  calculate did not return or the problem did not give. Ask for all the values a step needs at once (several
+  calculate calls in one reply), and compute whole expressions, not single fractions.
 - calculate understands + - * / ** ( ), comb(n, k), perm(n, k), factorial(n), sqrt, exp, log(x, base), ln, abs,
   round, min, max, sum, mean, var, stdev (sample), pvar, pstdev (population), Fraction(a, b), and
   dist(name, fn, x, **params) with name in norm, t, chi2, f, binom, poisson, hypergeom, geom, nbinom, expon,
@@ -45,7 +48,8 @@ FOLLOW_UP = ("Your **Answer:** line has {numbers}, which no calculate result giv
 RECHECK = ("Another solver's final answer was: {other}\nCheck your solution: recompute its key steps with the "
            "calculate tool. Then write the complete solution again (corrected if you found a mistake), ending "
            "with the **Answer:** line.")
-_ANSWER = re.compile(r"\*\*Answer:?\*\*:?[^\n]*(?:\n(?!\s*\n)[^\n]*)*", re.I)
+# the **Answer:** paragraph; when the label stands alone ("**Answer:**" then a blank line) the next one too
+_ANSWER = re.compile(r"\*\*Answer:?\*\*:?(?:[ \t]*\n\s*(?=\S))?[^\n]*(?:\n(?!\s*\n)[^\n]*)*", re.I)
 
 
 class SolverError(RuntimeError):
@@ -124,14 +128,20 @@ class GeminiBackend:
     def turn(self):
         body = {"contents": self.contents, "systemInstruction": self.system,
                 "tools": [{"functionDeclarations": [TOOL]}], "generationConfig": {"temperature": 0}}
+        retried = False
         while True:
             try:
                 data = self.client.generate(self.model, body)
                 break
             except GeminiError as exc:
-                if exc.kind != "model" or not self.fallbacks:
+                started = any(c.get("role") == "model" for c in self.contents)
+                if exc.kind in ("model", "busy", "rate", "quota") and self.fallbacks and not started:
+                    self.model = self.fallbacks.pop(0)       # retired, overloaded or out of quota: the next free one
+                elif exc.kind in ("busy", "rate") and not retried:
+                    retried = True                           # mid-solve its thought signatures tie it to this model
+                    time.sleep(min(exc.retry_after or BUSY_WAIT, MAX_WAIT))
+                else:
                     raise
-                self.model = self.fallbacks.pop(0)           # a retired model: the next free one
         candidates = data.get("candidates") or []
         if not candidates:
             raise SolverError(f"Gemini gave no answer ({(data.get('promptFeedback') or {}).get('blockReason', '')})")

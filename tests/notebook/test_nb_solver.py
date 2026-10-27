@@ -126,10 +126,10 @@ def test_gemini_errors_are_plain_and_never_show_the_key():
             gemini.Gemini("wrong-secret-key", base=fake.url).models()
         assert bad.value.kind == "key" and "wrong-secret-key" not in str(bad.value)
         assert "wrong-secret-key" not in fake.requests[0][0]                     # not in the URL either
-    with FakeGemini(replies=[{"status": 429, "message": "Resource has been exhausted"}]) as fake:
-        with pytest.raises(gemini.GeminiError, match="free quota is used up") as quota:
+    with FakeGemini(out_of_quota=set(fg.MODELS)) as fake:          # every free model: used up for today
+        with pytest.raises(gemini.GeminiError, match="used up for today") as quota:
             solver.solve(_gem(fake), COIN)
-        assert quota.value.kind == "quota"
+        assert quota.value.kind == "quota" and len(fake.requests) == 3
     with pytest.raises(gemini.GeminiError, match="No connection") as offline:
         gemini.Gemini("k", base="http://127.0.0.1:9").models()
     assert offline.value.kind == "network" and "k" not in repr(gemini.Gemini("k"))
@@ -143,6 +143,47 @@ def test_a_retired_model_falls_through_to_the_next_free_one():
     assert sol.model == "gemini-3.6-flash"
     assert gemini.pick(["gemini-3.5-flash-lite", "gemini-3.6-flash"]) == "gemini-3.6-flash"
     assert gemini.pick(["x"], wanted="x") == "x" and gemini.pick(["x"]) is None
+
+
+def test_an_overloaded_model_falls_through_before_it_starts_and_is_retried_once_after(monkeypatch):
+    monkeypatch.setattr(solver, "BUSY_WAIT", 0)
+    with FakeGemini(busy={"gemini-3.8-flash"}, replies=[fg.text("**Answer:** 0.1171875")]) as fake:
+        sol = solver.solve(_gem(fake), COIN + " It is 0.1171875.")
+    assert sol.model == "gemini-3.6-flash"
+    with FakeGemini(replies=[fg.call("comb(10, 3) / 2**10")]) as fake:     # starts, then its model gets busy
+        backend = _gem(fake)
+        backend.begin(solver.SYSTEM, COIN)
+        backend.turn()
+        fake.busy.add("gemini-3.8-flash")
+        with pytest.raises(gemini.GeminiError, match="busy") as busy:
+            backend.turn()
+        assert busy.value.kind == "busy" and backend.model == "gemini-3.8-flash"     # no switch mid-solve
+        assert sum("3.8-flash" in path for path, _, _ in fake.requests) == 3          # first, then one retry
+
+
+def test_a_per_minute_limit_waits_as_google_asks_and_a_used_up_model_falls_through(monkeypatch):
+    waits = []
+    monkeypatch.setattr(solver.time, "sleep", waits.append)
+    with FakeGemini(replies=[fg.call("comb(10, 3) / 2**10"), fg.text("**Answer:** 15/128")]) as fake:
+        backend = _gem(fake)
+        backend.begin(solver.SYSTEM, COIN)
+        backend.turn()
+        fake.rate_limited.add("gemini-3.8-flash")                    # mid-solve: wait 1 s, same model again
+        backend.results([(None, "x")], ["15/128 ≈ 0.1171875"])
+        text, _ = backend.turn()
+    assert waits == [1.0] and text == "**Answer:** 15/128" and backend.model == "gemini-3.8-flash"
+    with FakeGemini(out_of_quota={"gemini-3.8-flash"}, replies=[fg.text("**Answer:** 0.1171875")]) as fake:
+        sol = solver.solve(_gem(fake), COIN + " It is 0.1171875.")
+    assert sol.model == "gemini-3.6-flash"                            # before it starts: the next free model
+    err = gemini._error(429, b'{"error": {"message": "slow down", "details": [{"@type": "x.RetryInfo", '
+                             b'"retryDelay": "34s"}]}}', "m")
+    assert err.kind == "rate" and err.retry_after == 34.0 and "34 s" in str(err)
+
+
+def test_the_answer_may_follow_a_lone_answer_label():
+    md = "Steps.\n\n**Answer:**\n\n$P(X=2)=0.2009$\n\nThat is all."
+    assert solver.answer_text(md) == "**Answer:**\n\n$P(X=2)=0.2009$"
+    assert solver.answer_text("**Answer:** 1\n\n**Answer:** 2") == "**Answer:** 2"
 
 
 def test_recheck_replaces_the_solution_only_when_it_gives_an_answer():

@@ -196,13 +196,13 @@ def test_geminis_problem_shows_in_the_model_menu(app):
     from fake_gemini import FakeGemini
     solves = [{"calls": ["comb(4, 2) * (1/6)**2 * (5/6)**2"]}, "**Answer:** $0.1157407407$"]
     with FakeOllama({"vl": ["completion", "vision", "tools"]}, replies=solves) as fake, \
-            FakeGemini(replies=[{"status": 429, "message": "Resource has been exhausted"}]) as gem:
+            FakeGemini(out_of_quota={"gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"}) as gem:
         app.cfg.update(notebook_gemini_url=gem.url, notebook_gemini_key="test-key")
         nb = _ready(app, fake.url)
         nb.submit(nb_session().Source("Typed", text="A die is rolled 4 times. Find the chance of two sixes."))
         _wait(app, lambda: nb._turn is None)
     assert "Answer:" in nb.answers.plain_text()                  # qwen's solution, quietly
-    assert any(label.startswith("Gemini: Gemini's free quota is used up") for label in _menu_labels(nb))
+    assert any(label.startswith("Gemini: Gemini's free quota for") for label in _menu_labels(nb))
     assert not app.errors
 
 

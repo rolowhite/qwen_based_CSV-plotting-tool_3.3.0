@@ -20,9 +20,10 @@ KEY_PAGE = "https://aistudio.google.com/apikey"
 
 
 class GeminiError(RuntimeError):
-    def __init__(self, message: str, kind: str = "other"):
+    def __init__(self, message: str, kind: str = "other", retry_after: Optional[float] = None):
         super().__init__(message)
         self.kind = kind
+        self.retry_after = retry_after          # s Google asks to wait (a per-minute limit)
 
 
 class Cancelled(Exception):
@@ -35,17 +36,28 @@ def _error(status: int, body: bytes, model: str = "") -> GeminiError:
     except (ValueError, AttributeError):
         err = {}
     text = str(err.get("message") or body[:200].decode("utf-8", "replace")).strip()
-    reasons = " ".join(str(d.get("reason", "")) for d in err.get("details") or [] if isinstance(d, dict))
+    details = [d for d in err.get("details") or [] if isinstance(d, dict)]
+    reasons = " ".join(str(d.get("reason", "")) for d in details)
+    if status == 429:
+        quota_ids = " ".join(str(v.get("quotaId", "")) for d in details for v in d.get("violations") or []
+                             if isinstance(v, dict))
+        delay = next((d.get("retryDelay") for d in details if str(d.get("@type", "")).endswith("RetryInfo")), None)
+        try:
+            wait = float(str(delay).rstrip("s")) if delay else None
+        except ValueError:
+            wait = None
+        if "PerDay" in quota_ids or (wait is None and "PerMinute" not in quota_ids):
+            return GeminiError(f"Gemini's free quota for {model or 'this model'} is used up for today.", "quota")
+        return GeminiError("Gemini's free per-minute limit was reached; it lets you try again in "
+                           f"{wait or 60:.0f} s.", "rate", wait or 60.0)
     if "API_KEY_INVALID" in reasons or "API key not valid" in text or status in (401, 403):
         return GeminiError(f"Gemini didn't accept the key ({text}). Check it at {KEY_PAGE}.", "key")
     if "location is not supported" in text.lower():
         return GeminiError("Gemini's free tier isn't offered in your region.", "region")
-    if status == 429:
-        return GeminiError("Gemini's free quota is used up for now (it resets every day).", "quota")
     if status == 404:
         return GeminiError(f"The Gemini model {model or ''} isn't available ({text}).".replace("  ", " "), "model")
     if status >= 500:
-        return GeminiError(f"Gemini is busy right now (HTTP {status}).", "busy")
+        return GeminiError(f"Gemini is busy right now (HTTP {status}: {text[:120]})", "busy")
     return GeminiError(f"Gemini answered {status}: {text}", "other")
 
 

@@ -26,8 +26,11 @@ def call(*expressions, signature="sig-1"):
 
 
 class FakeGemini:
-    def __init__(self, key="test-key", replies=(), models=MODELS):
+    def __init__(self, key="test-key", replies=(), models=MODELS, busy=(), out_of_quota=(), rate_limited=()):
         self.key, self.replies, self.models, self.requests = key, list(replies), list(models), []
+        self.busy = set(busy)                   # models that answer 503 "high demand"
+        self.out_of_quota = set(out_of_quota)   # 429, the free requests per day are used up
+        self.rate_limited = set(rate_limited)   # 429 once, per minute, "retry in 1s" (then answer)
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -63,6 +66,20 @@ class FakeGemini:
                 model = self.path.split("/models/")[-1].split(":")[0]
                 if model not in fake.models:
                     self._json(404, {"error": {"code": 404, "message": f"models/{model} is not found"}})
+                    return
+                if model in fake.out_of_quota or model in fake.rate_limited:
+                    per_day = model in fake.out_of_quota
+                    fake.rate_limited.discard(model)
+                    details = [{"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [{
+                        "quotaId": "GenerateRequestsPer" + ("Day" if per_day else "Minute") + "PerProjectPerModel-FreeTier"}]}]
+                    if not per_day:
+                        details.append({"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "1s"})
+                    self._json(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "details": details,
+                                               "message": "You exceeded your current quota."}})
+                    return
+                if model in fake.busy:
+                    self._json(503, {"error": {"code": 503, "status": "UNAVAILABLE", "message":
+                                               "This model is currently experiencing high demand."}})
                     return
                 reply = fake.replies.pop(0) if fake.replies else text("**Answer:** (no scripted reply)")
                 if "status" in reply:

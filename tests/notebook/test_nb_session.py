@@ -134,13 +134,12 @@ def test_when_they_disagree_gemini_rechecks_once_and_its_answer_is_shown(index):
 
 
 def test_geminis_used_up_quota_gives_qwens_solution_and_says_why(index):
-    from fake_gemini import FakeGemini
-    with FakeOllama(MODELS, replies=QWEN_SOLVES) as qwen, \
-            FakeGemini(replies=[{"status": 429, "message": "Resource has been exhausted"}]) as gem:
+    from fake_gemini import MODELS as FREE, FakeGemini
+    with FakeOllama(MODELS, replies=QWEN_SOLVES) as qwen, FakeGemini(out_of_quota=set(FREE)) as gem:
         turn = _gemini_turn(index, qwen.url, gem.url)
         answers, _ = _run(turn)
     assert "**Answer:** $0.1171875$" in answers[0] and turn.answers[0]["from"] == "solver:text-only"
-    assert "free quota is used up" in turn.gemini_problem and "gemini" in turn.answers[0]["errors"]
+    assert "used up for today" in turn.gemini_problem and "gemini" in turn.answers[0]["errors"]
 
 
 def test_without_ollama_a_typed_problem_is_solved_by_gemini_alone(index):
