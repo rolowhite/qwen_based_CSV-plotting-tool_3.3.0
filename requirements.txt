@@ -5,3 +5,6 @@ seaborn>=0.12
 # needed for the "ROC / PR curve" graph and the Feature Lab's Evaluate with model / Kaggle submission
 # (it also brings scipy for Kendall correlation)
 scikit-learn>=1.1
+# the Notebook's answers: Markdown with $...$ math, drawn in the app and in the browser
+markdown-it-py>=3.0
+mdit-py-plugins>=0.4

@@ -111,6 +111,39 @@ def test_a_stored_and_an_unknown_problem_look_the_same(app):
     assert not app.errors
 
 
+def test_the_picture_reader_sets_itself_up_with_progress(app):
+    from plotstudio.core.notebook import ollama
+    with FakeOllama({"other": ["completion"]}) as fake:            # Ollama runs, the reading model is missing
+        fake.pull_delay = 0.4
+        nb = _ready(app, fake.url)
+        nb.start_reader_setup()
+        _wait(app, lambda: nb.setup_box.winfo_manager() == "pack" and float(nb.setup_bar.cget("value")) > 0)
+        assert "Downloading the reading model" in nb.setup_label.cget("text")
+        assert nb.progress.winfo_manager() == ""                     # its own bar, not the header's busy bar
+        assert nb.submit(nb_session().Source("Screenshot", _picture()), _picture()) is False
+        assert "still being set up" in nb.note_label.cget("text")
+        assert nb.submit(nb_session().Source("Typed", text=MARBLES)) is True      # typing works meanwhile
+        _wait(app, lambda: nb._setup_state == "done" and nb._turn is None)
+        assert fake.pulls == [ollama.READER_MODEL] and nb.setup_box.winfo_manager() == ""
+        assert "Solution." in nb.answers.plain_text()
+    assert not app.errors
+
+
+def test_a_failed_setup_says_why_and_can_be_tried_again(app):
+    nb = _ready(app, "http://127.0.0.1:9")
+    from plotstudio.core.notebook import setup
+    original = setup.ensure
+    setup.ensure = lambda url, progress, chat: (_ for _ in ()).throw(setup.ollama.OllamaError("no internet"))
+    try:
+        nb.start_reader_setup()
+        _wait(app, lambda: nb._setup_state == "failed")
+    finally:
+        setup.ensure = original
+    assert "couldn't be set up: no internet" in nb.setup_label.cget("text")
+    assert nb.setup_retry.winfo_manager() == "pack" and nb.setup_bar.winfo_manager() == ""
+    assert not app.errors
+
+
 def test_no_ollama_shows_how_to_set_it_up_and_typing_still_works(app):
     nb = _ready(app, "http://127.0.0.1:9")
     nb.submit(nb_session().Source("Screenshot", _picture()), _picture())
@@ -118,7 +151,7 @@ def test_no_ollama_shows_how_to_set_it_up_and_typing_still_works(app):
     assert any(item[0] == "setup" for item in nb.answers.items)
     card = nb.answers._windows[-1]
     texts = [w.cget("text") for w in card.winfo_children()]
-    assert "Reading pictures needs Ollama" in texts and any("ollama pull" in t for t in texts)
+    assert "The picture reader isn't ready" in texts and any("ollama pull" in t for t in texts)
     nb.entry.set_value(MARBLES)
     nb.send_text()
     _wait(app, lambda: nb._turn is None)

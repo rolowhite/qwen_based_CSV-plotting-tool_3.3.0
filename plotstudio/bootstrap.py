@@ -23,6 +23,8 @@ REQUIRED_MODULES = {
     "seaborn": "seaborn",
     "scikit-learn": "sklearn",
     "Pillow": "PIL",
+    "markdown-it-py": "markdown_it",
+    "mdit-py-plugins": "mdit_py_plugins",
 }
 IMPORT_MODULES = {          # PDF and image table import (optional; the app tells how to add them)
     "pypdfium2": "pypdfium2",
@@ -110,9 +112,25 @@ def _add_tesseract_to_path() -> bool:
     return True
 
 
+def install_tesseract() -> str:
+    """Install the Tesseract OCR program with winget on Windows if it's missing (its installer may show Windows'
+    administrator prompt). Meant for a background thread after the window opens; returns what happened."""
+    if _add_tesseract_to_path():
+        return "Tesseract OCR is installed."
+    if sys.platform != "win32" or os.environ.get("CSV_PLOT_STUDIO_NO_SETUP") or not shutil.which("winget"):
+        return "Tesseract OCR isn't installed (automatic setup is Windows-only and needs winget)."
+    out = subprocess.run(["winget", "install", "--id", "UB-Mannheim.TesseractOCR", "--exact", "--silent",
+                          "--accept-package-agreements", "--accept-source-agreements"],
+                         capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if _add_tesseract_to_path():
+        return "Tesseract OCR was installed."
+    return f"Tesseract OCR couldn't be installed (winget exit {out.returncode}): {(out.stdout or out.stderr)[-300:]}"
+
+
 def prepare_runtime() -> bool:
     """Install missing Python packages (in the app's own environment, or after asking), and say how to add the
-    OCR program. System package managers are never run: that is the user's call."""
+    OCR program. On Windows the app installs Tesseract and Ollama itself after its window opens
+    (install_tesseract, core/notebook/setup.py)."""
     missing = missing_requirements()
     if missing:
         if not _allowed(f"CSV Plot Studio needs {', '.join(missing)}. Install them now with pip?"):
@@ -125,7 +143,7 @@ def prepare_runtime() -> bool:
     if extra and sys.version_info >= (3, 10) and _allowed(
             "Add PDF and image table import (" + ", ".join(extra) + ")?"):
         _install_python_requirements(IMPORT_REQUIREMENTS, IMPORT_MODULES)       # optional: plotting works without
-    if not _add_tesseract_to_path():
+    if not _add_tesseract_to_path() and sys.platform != "win32":       # Windows: installed in the background
         print("Tesseract OCR isn't installed: CSV files and text PDFs work; screenshots and scanned PDFs need it "
               "(Windows: winget install UB-Mannheim.TesseractOCR, Linux: sudo apt install tesseract-ocr, "
               "macOS: brew install tesseract).", file=sys.stderr)

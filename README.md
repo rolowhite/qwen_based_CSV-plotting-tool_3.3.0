@@ -103,13 +103,27 @@ follows the mouse** and shows the value of the nearest point.
 ## Start it
 
 Run the starter for your computer. It creates a private app environment and downloads missing Python libraries
-automatically. The first start needs an internet connection and can take a few minutes. On Windows, the starter can
-also set up Python 3.12 through Windows Package Manager if Python is not already installed.
+automatically. The first start needs an internet connection.
 
 ### Windows
 
-Double-click **`run_windows.bat`**. It prepares the private environment, installs the app libraries, and tries to set
-up Tesseract OCR for image and scanned-PDF table imports. You do not need to install those components yourself.
+Double-click **`run_windows.bat`**. There is nothing else to install: the first start sets up everything by itself.
+* **Python 3.12**, if the PC has none: through Windows Package Manager, or else from python.org. The installer runs
+  only if it is signed by the Python Software Foundation.
+* **The app's Python packages**, in a private environment next to the app (`.venv`).
+* **Ollama and the Notebook's reading model** (`qwen3-vl:8b-instruct`, about 1.6 GB + 5 GB). This runs in the
+  background once the window is open, and the Notebook shows its progress. Ollama comes through Windows Package
+  Manager, or else from ollama.com, and runs only if it is signed by Ollama Inc. It installs for the current user
+  and needs no administrator rights. The app can be used meanwhile, and typed problems work right away.
+* **Tesseract OCR** for tables from pictures and scans, through Windows Package Manager in the background. Windows
+  may ask once for permission.
+
+The first start needs about 10 GB of free disk space and takes 15–45 minutes, depending on the connection.
+Later starts take a few seconds and need no internet. Set `CSV_PLOT_STUDIO_NO_SETUP=1` to switch the
+automatic Ollama, model and Tesseract setup off.
+
+To hand the app to others, run `python scripts/make_beta.py`. It writes `dist/CSV-Plot-Studio-<version>-beta.zip`
+with only the app's files and a short *READ ME FIRST.txt*.
 
 Want it on the desktop? Right-click `run_windows.bat` > *Send to* > *Desktop (create shortcut)*.
 
@@ -503,8 +517,8 @@ Nothing is filled in for you: an empty cell stays empty.
 
 PDF and image import are optional: `pip install -r requirements-import.txt` (Python 3.10+), plus the Tesseract OCR
 program for screenshots and scans (Windows: `winget install UB-Mannheim.TesseractOCR`, Linux: `sudo apt install
-tesseract-ocr`). The starters install the Python packages into the app's own environment; they never install
-system programs.
+tesseract-ocr`). The starters install the Python packages into the app's own environment. On Windows the app also
+installs Tesseract itself (see [Start it](#start-it)); on Linux it never runs system package managers.
 
 ### Notebook: a photo of a problem in, a worked solution out
 
@@ -518,11 +532,14 @@ Click **Notebook** on the gallery. It works like a chat:
   sides.
 
 You are never asked to check or fix what was read. Pictures are read by a local vision model running in **Ollama**
-on your own computer, so no cloud and no account are involved:
-1. Install Ollama from [ollama.com](https://ollama.com).
-2. Run `ollama pull qwen3-vl:8b-instruct` once (about 5 GB; it fits an 8 GB graphics card). Use the `-instruct` build:
-   the plain `qwen3-vl:8b` tag is a thinking model that reasons at length instead of copying (about 110 s per
-   picture, and it may not finish on a photo). When several are installed, a model without thinking is preferred.
+on your own computer, so no cloud and no account are involved. On Windows, the app installs Ollama and downloads
+`qwen3-vl:8b-instruct` by itself on the first start, and the Notebook shows the progress. If that fails (no
+internet, a full disk), the Notebook says why and offers **Try again**.
+
+Elsewhere, install Ollama from [ollama.com](https://ollama.com) and run `ollama pull qwen3-vl:8b-instruct` once
+(about 5 GB; it fits an 8 GB graphics card). Use the `-instruct` build: the plain `qwen3-vl:8b` tag is a thinking
+model that reasons at length instead of copying (about 110 s per picture, and it may not finish on a photo). When
+several models are installed, one without thinking is preferred.
 
 The model menu in the header lists the installed models that can read pictures (any model whose Ollama
 capabilities include `vision`). The Ollama address is `notebook_ollama_url` in the settings file (default
@@ -549,7 +566,6 @@ turn (what was read and where the answer came from) is logged in
 
 Formulas are drawn with matplotlib's mathtext, after a small rewrite for what mathtext lacks: `\le`, `\tfrac`,
 `\frac12`, `\boxed` and the like. `cases` and matrices are laid out cell by cell. A formula it still can't draw is
-shown as its TeX source. Install the Notebook's packages with `pip install -r requirements-notebook.txt`
-(markdown-it-py, Python 3.9+).
+shown as its TeX source.
 
 

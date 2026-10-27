@@ -4,3 +4,4 @@ __pycache__/
 tests/output/
 .pytest_cache/
 tests/.data/
+dist/

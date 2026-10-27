@@ -43,7 +43,8 @@ from .graphs import CATEGORIES, GRAPH_BY_ID, GRAPHS, compatible, suggest  # noqa
 from .core import overrides as type_overrides  # noqa: E402
 from .ideas import IdeaCard, IdeaService, IdeasView  # noqa: E402
 from .featurelab import FeatureLabView, LabService  # noqa: E402
-from .log import log_error, log_path  # noqa: E402
+from .log import log_error, log_path, logger  # noqa: E402
+from . import bootstrap  # noqa: E402
 from .limits import fmt_limit, fracs, is_full, limit_values, to_value  # noqa: E402
 from .navigate import WHEEL_ZOOM, Navigator, zoom_fracs  # noqa: E402
 from . import recommend  # noqa: E402
@@ -144,6 +145,9 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.deiconify()
         self.theme.dark_title_bar(self)
+        # first start on Windows: Tesseract (tables from pictures) installs in the background, apart from the rest
+        # so a waiting administrator prompt holds nothing up; the Notebook sets up its picture reader itself
+        threading.Thread(target=lambda: logger().info(bootstrap.install_tesseract()), daemon=True).start()
 
         if csv_path:
             if graph_id:

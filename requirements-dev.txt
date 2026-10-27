@@ -1,6 +1,5 @@
 -r requirements.txt
 -r requirements-import.txt
--r requirements-notebook.txt
 # tests:  python -m pytest        (add -m "not slow" to skip the one-minute smoke test)
 pytest>=7
 reportlab>=4.0              # writes the test PDFs

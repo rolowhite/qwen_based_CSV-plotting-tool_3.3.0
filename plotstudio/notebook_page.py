@@ -24,6 +24,7 @@ from . import APP_NAME, settings
 from .core.notebook import library as nb_library
 from .core.notebook import lookup as nb_lookup
 from .core.notebook import ollama, reader, render, session, tex
+from .core.notebook import setup as reader_setup
 from .log import log_error
 from .theme import C
 from .widgets import AutoScrollbar, PlaceholderEntry, ScrollFrame, SmoothScroller, Tooltip
@@ -33,6 +34,7 @@ GUTTER = 12
 THUMB = 240             # px: the long side of the picture in a bubble
 STREAM = object()       # marks a streamed event in the job queue (the job isn't finished yet)
 LIBRARY_FILES = (nb_library.BUILT_IN,)    # the solutions every answer comes from (for now); tests swap in their own
+OWN_PROGRESS = {"setup"}                  # jobs that show their own progress bar, not the header's busy bar
 
 
 def notebook_dir() -> Path:
@@ -393,15 +395,20 @@ class AnswerView(tk.Frame):
         t, px = self.t, self.px
         card = ttk.Frame(self.text, style="Well.TFrame", padding=(px(16), px(12)))
         width = px(440)
-        ttk.Label(card, text="Reading pictures needs Ollama", style="Raised.Bold.TLabel").pack(anchor="w")
+        automatic = reader_setup.enabled()
+        ttk.Label(card, text="The picture reader isn't ready", style="Raised.Bold.TLabel").pack(anchor="w")
         ttk.Label(card, text=message, style="Raised.Muted.TLabel", wraplength=width, justify="left").pack(
             anchor="w", pady=(px(4), px(8)))
-        for line in ("1.  Install Ollama from ollama.com (free; it runs on this PC, offline).",
-                     f"2.  In a terminal: {ollama.PULL_HINT}   (about 5 GB, once)"):
+        lines = (("Set it up installs Ollama and downloads the reading model (about 6 GB, once), by itself.",)
+                 if automatic else
+                 ("1.  Install Ollama from ollama.com (free; it runs on this PC, offline).",
+                  f"2.  In a terminal: {ollama.PULL_HINT}   (about 5 GB, once)"))
+        for line in lines:
             ttk.Label(card, text=line, style="Raised.TLabel", wraplength=width, justify="left").pack(anchor="w")
         ttk.Label(card, text="Typed problems work without it.", style="Raised.Faint.TLabel").pack(
             anchor="w", pady=(px(8), 0))
-        ttk.Button(card, text="Check again", style="Accent.TButton", command=self.page.check_models).pack(
+        ttk.Button(card, text="Set it up" if automatic else "Check again", style="Accent.TButton",
+                   command=self.page.start_reader_setup if automatic else self.page.check_models).pack(
             anchor="w", pady=(px(10), 0))
         self._windows.append(card)
         self.text.window_create("end-1c", window=card)
@@ -441,6 +448,9 @@ class NotebookPage(ttk.Frame):
         self._models = None         # [(name, capabilities)] from Ollama, None until checked
         self._jobs = queue.Queue()
         self._pending = 0
+        self._spinning = 0          # jobs that show the header's busy bar
+        self._setup_state = None    # the picture reader's automatic setup: None, "running", "done" or "failed"
+        self._setup_chat = None
         self._token = {}
         self._loading = False
 
@@ -474,6 +484,8 @@ class NotebookPage(ttk.Frame):
         self._build_answer(body, t, px).grid(row=0, column=1, sticky="nsew", padx=(px(6), 0))
         app.bind_all("<Control-v>", self._ctrl_v, add="+")
         self._fill_model_menu()
+        if reader_setup.enabled():
+            self.after(1500, self.start_reader_setup)     # first start: Ollama and its model, in the background
 
     # ------------------------------------------------------------------------------------------- layout --
     def _card(self, parent, px):
@@ -562,6 +574,15 @@ class NotebookPage(ttk.Frame):
         self.progress = ttk.Progressbar(top, mode="indeterminate", length=px(90))
         self.status = ttk.Label(top, style="Panel.Muted.TLabel")
         self.status.pack(side="right", padx=(px(10), 0))
+        # shown while the picture reader sets itself up (first start on Windows), with its own progress bar
+        self.setup_box = tk.Frame(box, background=C["panel"])
+        self.setup_label = ttk.Label(self.setup_box, style="Panel.Muted.TLabel", justify="left", wraplength=px(560))
+        self.setup_label.pack(anchor="w")
+        row = tk.Frame(self.setup_box, background=C["panel"])
+        row.pack(fill="x", pady=(px(4), 0))
+        self.setup_bar = ttk.Progressbar(row, mode="determinate", maximum=1.0)
+        self.setup_retry = ttk.Button(row, text="Try again", style="Small.TButton",
+                                      command=lambda: self.start_reader_setup())
         self.answers = AnswerView(box, self)
         self.answers.pack(fill="both", expand=True, pady=(px(8), 0))
         return card
@@ -591,9 +612,9 @@ class NotebookPage(ttk.Frame):
 
         self._pending += 1
         if self._pending == 1:
-            self.progress.pack(side="right", padx=(self.app.theme.px(8), 0))
-            self.progress.start(12)
             self.after(40, self._drain)
+        if kind not in OWN_PROGRESS:
+            self._spin(1)
         gc.collect()      # free dead Tk objects here: Tk must not delete them from the worker thread
         threading.Thread(target=target, daemon=True).start()
 
@@ -608,11 +629,20 @@ class NotebookPage(ttk.Frame):
                     handler(result)
                 continue
             self._pending -= 1
+            if kind not in OWN_PROGRESS:
+                self._spin(-1)
             if token == self._token.get(kind):
                 handler(result, error)
         if self._pending > 0:
             self.after(40, self._drain)
-        else:
+
+    def _spin(self, step):
+        """The small busy bar in the Solution header, while any job without its own progress runs."""
+        self._spinning += step
+        if self._spinning == 1 and step > 0:
+            self.progress.pack(side="right", padx=(self.app.theme.px(8), 0))
+            self.progress.start(12)
+        elif self._spinning == 0:
             self.progress.stop()
             self.progress.pack_forget()
 
@@ -638,6 +668,51 @@ class NotebookPage(ttk.Frame):
     # ------------------------------------------------------------------------------------------- models --
     def _url(self):
         return self.app.cfg.get("notebook_ollama_url") or ollama.DEFAULT_URL
+
+    def start_reader_setup(self):
+        """Install Ollama and download the reading model in the background, showing progress (Windows)."""
+        if self._setup_state == "running":
+            return
+        self._setup_state = "running"
+        url, chat = self._url(), ollama.Chat(self._url(), timeout=600)
+        self._setup_chat = chat
+        self.setup_retry.pack_forget()
+        self._run("setup", lambda emit: reader_setup.ensure(url, lambda text, part: emit((text, part)), chat),
+                  self._setup_done, on_event=self._setup_event)
+
+    def _setup_event(self, event):
+        text, part = event
+        if part == 1.0:
+            return                  # finished: _setup_done hides the box
+        px = self.app.theme.px
+        if not self.setup_box.winfo_manager():
+            self.setup_box.pack(fill="x", pady=(px(8), 0), before=self.answers)
+        if not self.setup_bar.winfo_manager():
+            self.setup_bar.pack(side="left", fill="x", expand=True)
+        self.setup_label.configure(text=f"Setting up the picture reader (once): {text}  Typed problems work now.",
+                                   style="Panel.Muted.TLabel")
+        if part is None:
+            if str(self.setup_bar.cget("mode")) != "indeterminate":
+                self.setup_bar.configure(mode="indeterminate", maximum=100)
+                self.setup_bar.start(12)
+        else:
+            self.setup_bar.stop()
+            self.setup_bar.configure(mode="determinate", maximum=1.0, value=part)
+
+    def _setup_done(self, model, error):
+        self.setup_bar.stop()
+        if error is None:
+            self._setup_state = "done"
+            self.setup_box.pack_forget()
+            self.check_models(quiet=True)
+            return
+        self._setup_state = "failed"
+        log_error("Notebook: setting up the picture reader failed", error)
+        self.setup_bar.pack_forget()
+        self.setup_label.configure(text=f"The picture reader couldn't be set up: {error}", style="Error.TLabel")
+        self.setup_retry.pack(side="left")
+        if not self.setup_box.winfo_manager():
+            self.setup_box.pack(fill="x", pady=(self.app.theme.px(8), 0), before=self.answers)
 
     def check_models(self, quiet=False):
         url = self._url()
@@ -876,6 +951,10 @@ class NotebookPage(ttk.Frame):
             return False
         if self._loading:
             self._note("Your solutions are still loading. Try again in a moment.", "Warn.TLabel")
+            return False
+        if self._setup_state == "running" and (source.image is not None or source.load is not None):
+            self._note("The picture reader is still being set up (progress on the right). Typed problems work "
+                       "now; pictures will in a moment.", "Warn.TLabel")
             return False
         if self.library is None:
             self._note("The built-in solutions couldn't be read (see the message on the right).", "Error.TLabel")

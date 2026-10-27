@@ -30,7 +30,7 @@ class RenderUnavailable(RuntimeError):
 
 
 def how_to_enable() -> str:
-    return "Showing solutions needs markdown-it-py: pip install -r requirements-notebook.txt"
+    return "Showing answers needs markdown-it-py. Start the app with its starter again (it installs it), or: "            "pip install -r requirements.txt"
 
 
 def _markdown():

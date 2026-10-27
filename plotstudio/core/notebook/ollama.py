@@ -18,7 +18,8 @@ from urllib.parse import urlsplit
 DEFAULT_URL = "http://localhost:11434"
 LONG_SIDE_MAX = 2000      # px: bigger pictures only cost time
 LONG_SIDE_MIN = 1200      # px: small screenshots are scaled up so small print stays readable
-PULL_HINT = "ollama pull qwen3-vl:8b-instruct"      # the build without thinking: it copies, fast
+READER_MODEL = "qwen3-vl:8b-instruct"   # the build without thinking: it copies, fast (the plain tag thinks)
+PULL_HINT = f"ollama pull {READER_MODEL}"
 
 
 class OllamaError(RuntimeError):
@@ -115,7 +116,7 @@ def prepare_image(image, long_side: Optional[int] = None) -> str:
 
 
 class Chat:
-    """One streamed /api/chat call at a time; `cancel()` may be called from any thread."""
+    """One streamed call (a chat, or a model download) at a time; `cancel()` may be called from any thread."""
 
     def __init__(self, url: str = DEFAULT_URL, timeout: float = 300.0):
         self.url = url
@@ -141,26 +142,33 @@ class Chat:
     def stream(self, model: str, messages: list, format=None, think: Optional[bool] = None,
                options: Optional[dict] = None) -> Iterator[dict]:
         """The reply's JSON chunks ({"message": {"content": ...}, "done": ...}) as they arrive."""
-        if self.cancelled:
-            raise Cancelled()
         payload = {"model": model, "messages": messages, "stream": True,
                    "options": options if options is not None else {"temperature": 0}}
         if format is not None:
             payload["format"] = format
         if think is not None:
             payload["think"] = think
+        return self._post("/api/chat", payload, model)
+
+    def pull(self, model: str) -> Iterator[dict]:
+        """Download a model: {"status": ..., "digest": ..., "total": bytes, "completed": bytes} as it goes."""
+        return self._post("/api/pull", {"model": model, "stream": True}, model)
+
+    def _post(self, path: str, payload: dict, model: str) -> Iterator[dict]:
+        if self.cancelled:
+            raise Cancelled()
         conn = _connection(self.url, self.timeout)
         with self._lock:
             self._conn = conn
         try:
             try:
-                conn.request("POST", "/api/chat", body=json.dumps(payload), headers={"Content-Type": "application/json"})
+                conn.request("POST", path, body=json.dumps(payload), headers={"Content-Type": "application/json"})
                 response = conn.getresponse()
                 if response.status != 200:
                     text = _error_text(response.read())
                     if response.status == 404:
                         raise NotReady(f"The model {model} isn't installed in Ollama ({text}). "
-                                          f"Run: ollama pull {model}")
+                                       f"Run: ollama pull {model}")
                     raise OllamaError(f"Ollama answered {response.status}: {text}")
                 for line in response:
                     if self.cancelled:
@@ -178,7 +186,7 @@ class Chat:
                     if chunk.get("done") and chunk.get("done_reason") == "length":
                         raise OllamaError(f"{model} stopped at its length limit before finishing its reply.")
                     yield chunk
-                    if chunk.get("done"):
+                    if chunk.get("done") or chunk.get("status") == "success":      # a chat / a pull is finished
                         return
             except (OSError, http.client.HTTPException) as exc:
                 if self.cancelled:

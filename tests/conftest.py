@@ -12,6 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("CSV_PLOT_STUDIO_LOG", str(Path(tempfile.gettempdir()) / "csv_plot_studio_tests.log"))
+os.environ.setdefault("CSV_PLOT_STUDIO_NO_SETUP", "1")     # tests never install Ollama, its model or Tesseract
 
 import matplotlib  # noqa: E402
 
