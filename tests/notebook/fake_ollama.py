@@ -5,7 +5,8 @@ replies, and /api/pull (a 3 GB download in three steps, after which the model is
         ollama.models(fake.url)
 
 A reply is the text the model "writes" (sent in a few chunks), or a dict {"status": 500, "error": "..."},
-or {"text": ..., "delay": 0.2} to send it slowly. Every /api/chat request body is kept in `fake.requests`.
+or {"text": ..., "delay": 0.2} to send it slowly, or {"text": ..., "calls": ["comb(10, 3)"]} for calculate
+tool calls. Every /api/chat request body is kept in `fake.requests`.
 """
 import json
 import threading
@@ -78,7 +79,7 @@ class FakeOllama:
                 self.send_response(200)
                 self.send_header("Content-Type", "application/x-ndjson")
                 self.end_headers()
-                text, delay = reply["text"], reply.get("delay", 0)
+                text, delay = reply.get("text", ""), reply.get("delay", 0)
                 step = max(1, len(text) // 4)
                 try:
                     for i in range(0, len(text), step):
@@ -86,6 +87,12 @@ class FakeOllama:
                         self.wfile.write(json.dumps({"message": {"role": "assistant", "content": text[i:i + step]},
                                                      "done": False}).encode() + b"\n")
                         self.wfile.flush()
+                    if reply.get("calls"):      # {"text": ..., "calls": ["comb(10, 3)", ...]}: tool calls
+                        calls = [{"id": f"call_{n}", "function": {"index": n, "name": "calculate",
+                                                                   "arguments": {"expression": e}}}
+                                 for n, e in enumerate(reply["calls"])]
+                        self.wfile.write(json.dumps({"message": {"role": "assistant", "content": "",
+                                                                 "tool_calls": calls}, "done": False}).encode() + b"\n")
                     self.wfile.write(json.dumps({"message": {"role": "assistant", "content": ""}, "done": True,
                                                  "done_reason": reply.get("done_reason", "stop")}).encode() + b"\n")
                 except OSError:
