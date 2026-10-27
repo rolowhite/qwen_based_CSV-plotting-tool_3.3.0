@@ -27,6 +27,8 @@ DEFAULTS = {
     "graph_names": {},
     "notebook_ollama_url": "http://localhost:11434",   # the local Ollama that reads pictures
     "notebook_reader_model": "",    # the Ollama model that reads pictures ("" = the first that can)
+    "notebook_gemini_key": "",      # the user's own free Gemini key (optional; kept only in this file)
+    "notebook_gemini_model": "",    # "" = the best free Gemini model the key may use
 }
 
 

@@ -23,7 +23,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from . import APP_NAME, settings
 from .core.notebook import library as nb_library
 from .core.notebook import lookup as nb_lookup
-from .core.notebook import ollama, reader, render, session, tex
+from .core.notebook import gemini, ollama, reader, render, session, solver, tex
 from .core.notebook import setup as reader_setup
 from .log import log_error
 from .theme import C
@@ -35,6 +35,12 @@ THUMB = 240             # px: the long side of the picture in a bubble
 STREAM = object()       # marks a streamed event in the job queue (the job isn't finished yet)
 LIBRARY_FILES = (nb_library.BUILT_IN,)    # the solutions every answer comes from (for now); tests swap in their own
 OWN_PROGRESS = {"setup"}                  # jobs that show their own progress bar, not the header's busy bar
+GEMINI_NOTICE = ("Gemini (Google) then solves new problems alongside the model on this computer, and its solution "
+                 "is shown. The problem's text and picture are sent to Google for that. With a free key, Google may "
+                 "use what you send to improve its products and people at Google may read it, so don't send anything "
+                 "private. You must be 18 or older, and the free tier isn't for users in the EU, the UK or "
+                 "Switzerland. Without a key everything still works, offline.")
+GEMINI_TIP = "Tip: a free Gemini key (in the model menu at the top) gives better solutions to new problems."
 
 
 def notebook_dir() -> Path:
@@ -451,6 +457,9 @@ class NotebookPage(ttk.Frame):
         self._spinning = 0          # jobs that show the header's busy bar
         self._setup_state = None    # the picture reader's automatic setup: None, "running", "done" or "failed"
         self._setup_chat = None
+        self._gemini_problem = None  # why Gemini didn't help the last turn (shown in the Model menu)
+        self._gemini_window = None
+        self._tipped = False         # the "add a Gemini key" tip is shown once per session
         self._token = {}
         self._loading = False
 
@@ -749,12 +758,22 @@ class NotebookPage(ttk.Frame):
                              "No picture-reading model found", state="disabled")
         menu.add_separator()
         menu.add_command(label="Check again", command=self.check_models)
-        self.model_button.configure(text=chosen or "Model")
+        menu.add_separator()
+        has_key = bool(self.app.cfg.get("notebook_gemini_key"))
+        if has_key:
+            model = self.app.cfg.get("notebook_gemini_model") or gemini.MODELS[0]
+            state = f"Gemini: {self._gemini_problem}" if self._gemini_problem else f"Gemini: on · {model}"
+            menu.add_command(label=state if len(state) < 90 else state[:87] + "…", state="disabled")
+            menu.add_command(label="Change the Gemini key…", command=self.gemini_dialog)
+            menu.add_command(label="Remove the Gemini key", command=self.remove_gemini_key)
+        else:
+            menu.add_command(label="Gemini: add a free key for better solutions…", command=self.gemini_dialog)
+        self.model_button.configure(text=(chosen or "Model") + (" + Gemini" if has_key else ""))
 
     def _model_chosen(self):
         self.app.cfg["notebook_reader_model"] = self.model_var.get()
         settings.save(self.app.cfg)
-        self.model_button.configure(text=self.model_var.get())
+        self._fill_model_menu()
 
     # ------------------------------------------------------------------------------------------- input --
     def open_dialog(self):
@@ -965,7 +984,10 @@ class NotebookPage(ttk.Frame):
         self.answers.add_turn(self._turns)
         self.set_status("Working…")
         self._busy(True)
-        self._turn = session.Turn(source, self.index, self._url(), self.model_var.get(), history_path())
+        cfg = self.app.cfg
+        self._turn = session.Turn(source, self.index, self._url(), self.model_var.get(), history_path(),
+                                  gemini_key=cfg.get("notebook_gemini_key") or "",
+                                  gemini_model=cfg.get("notebook_gemini_model") or "", gemini_base=self._gemini_url())
         self._run("turn", self._turn.run, self._turn_done, on_event=self._turn_event)
         return True
 
@@ -981,23 +1003,109 @@ class NotebookPage(ttk.Frame):
             self.answers.end(value)
 
     def _turn_done(self, _answers, error):
-        self._turn = None
+        turn, self._turn = self._turn, None
         self._busy(False)
         self.set_status("")
+        if turn is not None:
+            self._gemini_state(turn)
         if error is None:
             return
         self.answers.finish()           # keep what had arrived, drawn
-        if isinstance(error, ollama.Cancelled):
+        if isinstance(error, (ollama.Cancelled, gemini.Cancelled)):
             self.answers.note("Stopped.")
         elif isinstance(error, ollama.NotReady):
             self.answers.setup(str(error))
             self.check_models(quiet=True)
-        elif isinstance(error, ollama.OllamaError):
-            log_error("Notebook: the reading model failed", error)
+        elif isinstance(error, (ollama.OllamaError, gemini.GeminiError, solver.SolverError)):
+            log_error("Notebook: the model failed", error)
             self.answers.note(str(error), "error")
         else:
             log_error("Notebook: a turn failed", error)
             self.answers.note(f"Something went wrong: {type(error).__name__}: {error}", "error")
+
+    def _gemini_state(self, turn):
+        """After a turn: what the Model menu says about Gemini, and the one-time tip to add a key."""
+        has_key = bool(self.app.cfg.get("notebook_gemini_key"))
+        solved = [a for a in turn.answers if str(a.get("from", "")).startswith("solver:")]
+        if turn.gemini_problem:
+            self._gemini_problem = turn.gemini_problem
+        elif any(s.get("solver") == "gemini" for a in solved for s in a.get("solutions", [])):
+            self._gemini_problem = None
+        self._fill_model_menu()
+        if solved and not has_key and not self._tipped:
+            self._tipped = True
+            self._note(GEMINI_TIP, "Panel.Muted.TLabel")
+
+    # -------------------------------------------------------------------------------------------- Gemini --
+    def _gemini_url(self):
+        return self.app.cfg.get("notebook_gemini_url") or gemini.BASE_URL
+
+    def gemini_dialog(self):
+        """Add (or change) the user's own free Gemini key; it is checked before it is saved."""
+        t, px = self.app.theme, self.app.theme.px
+        win = tk.Toplevel(self)
+        win.title("Gemini key")
+        win.transient(self.winfo_toplevel())
+        win.configure(background=C["bg"])
+        win.resizable(False, False)
+        card = ttk.Frame(win, style="Card.TFrame", padding=(px(20), px(16)))
+        card.pack(fill="both", expand=True, padx=px(12), pady=px(12))
+        box = tk.Frame(card, background=C["panel"])
+        box.pack(fill="both", expand=True)
+        ttk.Label(box, text="Better solutions with Gemini (optional)", style="Panel.H3.TLabel").pack(anchor="w")
+        ttk.Label(box, text=GEMINI_NOTICE, style="Panel.Muted.TLabel", wraplength=px(470), justify="left").pack(
+            anchor="w", pady=(px(6), px(8)))
+        ttk.Button(box, text="Get a free key at aistudio.google.com", style="Link.TButton",
+                   command=lambda: webbrowser.open(gemini.KEY_PAGE)).pack(anchor="w")
+        win.entry = ttk.Entry(box, show="•", width=52, style="Panel.TEntry")
+        win.entry.pack(fill="x", pady=(px(10), px(4)))
+        win.message = ttk.Label(box, style="Panel.Muted.TLabel", wraplength=px(470), justify="left")
+        win.message.pack(anchor="w", fill="x")
+        row = tk.Frame(box, background=C["panel"])
+        row.pack(fill="x", pady=(px(12), 0))
+        win.save = ttk.Button(row, text="Save", style="Accent.TButton", command=lambda: self._check_key(win))
+        win.save.pack(side="right")
+        ttk.Button(row, text="Cancel", command=win.destroy).pack(side="right", padx=(0, px(6)))
+        win.entry.bind("<Return>", lambda e: self._check_key(win))
+        win.entry.focus_set()
+        self._gemini_window = win
+        return win
+
+    def _check_key(self, win):
+        key = win.entry.get().strip()
+        if not key:
+            win.message.configure(text="Paste the key first.", style="Warn.TLabel")
+            return
+        win.save.state(["disabled"])
+        win.message.configure(text="Checking the key…", style="Panel.Muted.TLabel")
+        base = self._gemini_url()
+        self._run("gemini_key", lambda: gemini.Gemini(key, base).models(),
+                  lambda found, error: self._key_checked(win, key, found, error))
+
+    def _key_checked(self, win, key, found, error):
+        if not win.winfo_exists():
+            return
+        if error is not None:
+            if not isinstance(error, gemini.GeminiError):
+                log_error("Notebook: checking the Gemini key failed", error)
+            win.message.configure(text=str(error), style="Error.TLabel")
+            win.save.state(["!disabled"])
+            return
+        cfg = self.app.cfg
+        cfg["notebook_gemini_key"] = key
+        cfg["notebook_gemini_model"] = gemini.pick(found, cfg.get("notebook_gemini_model") or "") or gemini.MODELS[0]
+        settings.save(cfg)
+        self._gemini_problem = None
+        self._fill_model_menu()
+        self.set_status(f"Gemini is on ({cfg['notebook_gemini_model']}).")
+        win.destroy()
+
+    def remove_gemini_key(self):
+        self.app.cfg.pop("notebook_gemini_key", None)
+        settings.save(self.app.cfg)
+        self._gemini_problem = None
+        self._fill_model_menu()
+        self.set_status("Gemini is off: new problems are solved on this computer only.")
 
     def stop(self):
         if self._turn is not None:

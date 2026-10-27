@@ -93,16 +93,20 @@ def test_a_pasted_picture_is_read_and_answered_in_the_right_pane(app, monkeypatc
     assert not app.errors
 
 
-def test_a_stored_and_an_unknown_problem_look_the_same(app):
-    nb = _ready(app, "http://127.0.0.1:9")
-    nb.submit(nb_session().Source("Typed", text=MARBLES))
-    _wait(app, lambda: nb._turn is None)
-    nb.submit(nb_session().Source("Typed", text="A die is rolled 4 times. Find the chance of two sixes."))
-    _wait(app, lambda: nb._turn is None)
+def test_a_stored_and_a_solved_problem_look_the_same(app):
+    # an unknown problem used to get "I can't solve this one yet"; now the local model solves it
+    solves = [{"text": "**Given:** 4 rolls. Binomial:", "calls": ["comb(4, 2) * (1/6)**2 * (5/6)**2"]},
+              "So $P=25/216$.\n\n**Answer:** $0.1157407407$"]
+    with FakeOllama({"vl": ["completion", "vision", "tools"]}, replies=solves) as fake:
+        nb = _ready(app, fake.url)
+        nb.submit(nb_session().Source("Typed", text=MARBLES))
+        _wait(app, lambda: nb._turn is None)
+        nb.submit(nb_session().Source("Typed", text="A die is rolled 4 times. Find the chance of two sixes."))
+        _wait(app, lambda: nb._turn is None)
     shown = nb.answers.plain_text()
-    assert nb_session().NOT_YET in shown and "Solution." in shown
-    for word in ("library", "score", "match", "verified", "checker"):
-        assert word not in shown.lower()
+    assert shown.count("Solution.") == 2 and "Answer:" in shown and _images(nb)
+    import re
+    assert not re.search(r"\b(library|score|match|verified|checker|qwen|gemini|vl)\b", shown.lower())
     assert len(nb.answers._windows) == 2            # Copy / Open in browser under each answer, nothing else
     assert all(isinstance(w, tk.Frame) for w in nb.answers._windows)
     assert len(nb.turns.body.winfo_children()) == 3      # the empty hint (hidden) and two bubbles
@@ -141,6 +145,64 @@ def test_a_failed_setup_says_why_and_can_be_tried_again(app):
         setup.ensure = original
     assert "couldn't be set up: no internet" in nb.setup_label.cget("text")
     assert nb.setup_retry.winfo_manager() == "pack" and nb.setup_bar.winfo_manager() == ""
+    assert not app.errors
+
+
+def _menu_labels(nb):
+    menu = nb.model_menu
+    return [menu.entrycget(i, "label") for i in range(menu.index("end") + 1) if menu.type(i) != "separator"]
+
+
+def test_the_gemini_key_is_checked_saved_shown_and_removed(app):
+    from fake_gemini import FakeGemini
+    with FakeGemini(key="good-key") as gem:
+        app.cfg["notebook_gemini_url"] = gem.url
+        nb = _ready(app, "http://127.0.0.1:9")
+        assert "Gemini: add a free key for better solutions…" in _menu_labels(nb)
+        win = nb.gemini_dialog()
+        texts = " ".join(w.cget("text") for w in win.winfo_children()[0].winfo_children()[0].winfo_children()
+                         if isinstance(w, tk.ttk.Label))
+        assert "18 or older" in texts and "EU" in texts and "text and picture are sent" in texts
+        win.entry.insert(0, "bad-key")
+        nb._check_key(win)
+        _wait(app, lambda: "didn't accept the key" in win.message.cget("text"))
+        assert "notebook_gemini_key" not in app.cfg or not app.cfg["notebook_gemini_key"]
+        win.entry.delete(0, "end")
+        win.entry.insert(0, "good-key")
+        nb._check_key(win)
+        _wait(app, lambda: not win.winfo_exists())
+    assert app.cfg["notebook_gemini_key"] == "good-key" and app.cfg["notebook_gemini_model"] == "gemini-3.8-flash"
+    assert "Gemini: on · gemini-3.8-flash" in _menu_labels(nb) and nb.model_button.cget("text").endswith("+ Gemini")
+    nb.remove_gemini_key()
+    assert not app.cfg.get("notebook_gemini_key") and "Gemini: add a free key for better solutions…" in _menu_labels(nb)
+    assert not app.errors
+
+
+def test_the_add_a_key_tip_shows_once_after_a_live_solve(app):
+    from plotstudio import notebook_page
+    solves = [{"calls": ["comb(4, 2) * (1/6)**2 * (5/6)**2"]}, "**Answer:** $0.1157407407$"] * 2
+    with FakeOllama({"vl": ["completion", "vision", "tools"]}, replies=solves) as fake:
+        nb = _ready(app, fake.url)
+        nb.submit(nb_session().Source("Typed", text="A die is rolled 4 times. Find the chance of two sixes."))
+        _wait(app, lambda: nb._turn is None)
+        assert nb.note_label.cget("text") == notebook_page.GEMINI_TIP
+        nb.submit(nb_session().Source("Typed", text="A die is rolled 4 times. Find the chance of two fives."))
+        _wait(app, lambda: nb._turn is None)
+        assert nb.note_label.cget("text") == ""                  # cleared by the next turn, not shown again
+    assert not app.errors
+
+
+def test_geminis_problem_shows_in_the_model_menu(app):
+    from fake_gemini import FakeGemini
+    solves = [{"calls": ["comb(4, 2) * (1/6)**2 * (5/6)**2"]}, "**Answer:** $0.1157407407$"]
+    with FakeOllama({"vl": ["completion", "vision", "tools"]}, replies=solves) as fake, \
+            FakeGemini(replies=[{"status": 429, "message": "Resource has been exhausted"}]) as gem:
+        app.cfg.update(notebook_gemini_url=gem.url, notebook_gemini_key="test-key")
+        nb = _ready(app, fake.url)
+        nb.submit(nb_session().Source("Typed", text="A die is rolled 4 times. Find the chance of two sixes."))
+        _wait(app, lambda: nb._turn is None)
+    assert "Answer:" in nb.answers.plain_text()                  # qwen's solution, quietly
+    assert any(label.startswith("Gemini: Gemini's free quota is used up") for label in _menu_labels(nb))
     assert not app.errors
 
 
