@@ -25,6 +25,10 @@ class OllamaError(RuntimeError):
     """Ollama isn't running, the model is missing, or the reply was not what we asked for."""
 
 
+class NotReady(OllamaError):
+    """Ollama isn't running, or no installed model can do the job: the page shows how to set it up."""
+
+
 class Cancelled(Exception):
     """The user pressed Stop."""
 
@@ -38,7 +42,7 @@ def _connection(url: str, timeout: float) -> http.client.HTTPConnection:
 
 
 def _not_running(url: str, exc: BaseException) -> OllamaError:
-    return OllamaError(f"Ollama isn't running at {url} ({exc}). Start the Ollama app, or install it from "
+    return NotReady(f"Ollama isn't running at {url} ({exc}). Start the Ollama app, or install it from "
                        f"https://ollama.com and run: {PULL_HINT}")
 
 
@@ -150,7 +154,7 @@ class Chat:
                 if response.status != 200:
                     text = _error_text(response.read())
                     if response.status == 404:
-                        raise OllamaError(f"The model {model} isn't installed in Ollama ({text}). "
+                        raise NotReady(f"The model {model} isn't installed in Ollama ({text}). "
                                           f"Run: ollama pull {model}")
                     raise OllamaError(f"Ollama answered {response.status}: {text}")
                 for line in response:
