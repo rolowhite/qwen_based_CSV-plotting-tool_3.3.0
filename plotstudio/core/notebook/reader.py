@@ -68,6 +68,16 @@ def table_rules(markdown: str) -> str:
     return "\n".join(out)
 
 
+_MATH = re.compile(r"((?<!\\)\$\$.*?(?<!\\)\$\$|(?<!\\)\$[^$]*?(?<!\\)\$)", re.S)
+
+
+def line_breaks(markdown: str) -> str:
+    """Some replies escape their line breaks twice, so they arrive as a backslash and an n. Outside math that is
+    always a line break; inside math it is left alone (\\nu, \\neq are commands)."""
+    parts = _MATH.split(markdown)
+    return "".join(p if i % 2 else p.replace("\\n", "\n") for i, p in enumerate(parts))
+
+
 def parse(raw: str) -> Reading:
     """The model's JSON reply as a Reading; OllamaError when it isn't the shape that was asked for."""
     text = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", raw)       # some models fence JSON even when told not to
@@ -77,13 +87,16 @@ def parse(raw: str) -> Reading:
         raise ollama.OllamaError("The reading model's reply wasn't valid JSON.") from exc
     if not isinstance(data, dict) or not isinstance(data.get("problems"), list):
         raise ollama.OllamaError("The reading model's reply doesn't list the problems.")
-    problems = []
+    problems, seen = [], set()
     for p in data["problems"]:
         if not isinstance(p, dict) or not isinstance(p.get("markdown"), str):
             raise ollama.OllamaError("The reading model sent a problem without its text.")
         label = p.get("label") if isinstance(p.get("label"), str) else ""
-        if p["markdown"].strip():
-            problems.append(Problem(label.strip(), table_rules(p["markdown"].strip())))
+        markdown = table_rules(line_breaks(p["markdown"]).strip())
+        key = " ".join(markdown.split())
+        if markdown and key not in seen:          # the model sometimes lists the one problem twice
+            seen.add(key)
+            problems.append(Problem(label.strip(), markdown))
     unreadable = [u.strip() for u in data.get("unreadable") or [] if isinstance(u, str) and u.strip()]
     return Reading(problems, unreadable, raw)
 

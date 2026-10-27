@@ -59,6 +59,17 @@ def test_a_table_without_its_rule_line_gets_one():
     assert reader.parse(_reply(("", read))).problems[0].markdown == fixed
 
 
+def test_doubly_escaped_line_breaks_and_a_repeated_problem_are_repaired():
+    # what qwen3-vl:8b-instruct really sent for one picture of Exercise 3.13 (shortened)
+    raw = ('{"problems": [{"label": "", "markdown": "has the distribution below.\\\\n\\\\n| x | 0 | 1 |\\\\n|---|---|---|'
+           '\\\\n| f(x) | 0.41 | 0.59 |"}, {"label": "", "markdown": "has the distribution  below.\\\\n\\\\n| x | 0 | 1 '
+           '|\\\\n|---|---|---|\\\\n| f(x) | 0.41 | 0.59 |"}], "unreadable": []}')
+    reading = reader.parse(raw)
+    assert len(reading.problems) == 1
+    assert reading.problems[0].markdown == "has the distribution below.\n\n| x | 0 | 1 |\n|---|---|---|\n| f(x) | 0.41 | 0.59 |"
+    assert reader.line_breaks(r"$\nu \neq 0$ and \$5\n$\nabla$") == "$\\nu \\neq 0$ and \\$5\n$\\nabla$"
+
+
 def test_fenced_json_empty_problems_and_unreadable_notes():
     raw = "```json\n" + _reply(("", "Find the mean."), ("", "  "), unreadable=["the figure's axis"]) + "\n```"
     reading = reader.parse(raw)
