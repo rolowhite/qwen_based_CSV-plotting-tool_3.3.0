@@ -167,6 +167,21 @@ def reader_problem(text):
     return reader.Problem("", text)
 
 
+def test_a_local_model_past_its_time_budget_is_stopped(index, monkeypatch):
+    from fake_gemini import FakeGemini, call, text
+    from plotstudio.core.notebook import solver
+    monkeypatch.setattr(session, "QWEN_BUDGET", 1)
+    slow = [{"text": "Thinking about it at length " * 4, "delay": 0.6}]
+    with FakeOllama(MODELS, replies=list(slow)) as qwen:
+        with pytest.raises(solver.SolverError, match="took the model on this computer more than"):
+            _run(session.Turn(session.Source("typed", text=COIN), index, qwen.url, pace=0))
+    with FakeOllama(MODELS, replies=list(slow)) as qwen, \
+            FakeGemini(replies=[call("comb(10, 3) / 2**10"), text("**Answer:** 0.1171875")]) as gem:
+        turn = _gemini_turn(index, qwen.url, gem.url)
+        answers, _ = _run(turn)                                     # the turn itself goes on: Gemini's answer
+    assert "**Answer:** 0.1171875" in answers[0] and "took the model" in turn.answers[0]["errors"]["qwen"]
+
+
 def test_without_ollama_or_a_key_a_new_problem_needs_setting_up(index):
     turn = session.Turn(session.Source("typed", text=COIN), index, "http://127.0.0.1:9", pace=0)
     with pytest.raises(ollama.NotReady, match="isn't running"):

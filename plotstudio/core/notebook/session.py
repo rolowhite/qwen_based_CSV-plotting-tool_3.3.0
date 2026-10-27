@@ -26,6 +26,7 @@ NOTHING = "I couldn't find a problem in this picture. Try a sharper picture, or 
 PACE = 0.03              # seconds between streamed pieces
 WORDS = 3                # words per piece
 SECOND_READ = 1.5        # the second read sends the picture this much bigger (or smaller, past the size cap)
+QWEN_BUDGET = 180        # s the local model may take to solve one problem (a looping model is stopped)
 
 
 @dataclass
@@ -176,7 +177,8 @@ class Turn:
             return None, ollama.NotReady("None of the models installed in Ollama can use tools. Run: "
                                          + ollama.PULL_HINT)
         caps = dict(found)[name]
-        return solver.OllamaBackend(self.chat, name, False if "thinking" in caps else None), None
+        # its own connection, so its time budget can stop it without stopping the turn
+        return solver.OllamaBackend(ollama.Chat(self.url), name, False if "thinking" in caps else None), None
 
     def _gemini_backend(self):
         key, model, base = self._gemini
@@ -203,12 +205,22 @@ class Turn:
                 results[name] = exc
 
         threads = [threading.Thread(target=work, args=(n, b, i), daemon=True) for n, (b, i) in jobs.items()]
+        budget = threading.Timer(QWEN_BUDGET, qwen.cancel) if qwen is not None else None
         for t in threads:
             t.start()
+        if budget is not None:
+            budget.daemon = True
+            budget.start()
         for t in threads:
             t.join()
+        if budget is not None:
+            budget.cancel()
         if self.chat.cancelled:
             raise ollama.Cancelled()
+        if isinstance(results.get("qwen"), (ollama.Cancelled, ollama.OllamaError)) and qwen.chat.cancelled:
+            results["qwen"] = solver.SolverError(
+                f"This problem took the model on this computer more than {QWEN_BUDGET // 60} minutes, so it was "
+                "stopped. A free Gemini key (model menu at the top) helps with long problems.")
         errors = {n: f"{type(r).__name__}: {r}" for n, r in results.items() if isinstance(r, BaseException)}
         if qwen is None:
             errors["qwen"] = f"{type(qwen_problem).__name__}: {qwen_problem}"
