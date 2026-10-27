@@ -55,6 +55,10 @@ def test_math_written_differently_keeps_the_same_numbers():
     assert library_match.problem_numbers(r"$\frac{7}{12}$ of 20,000") == \
         library_match.problem_numbers("7/12 of 20000")
     assert library_match.problem_numbers("3.13 The 3 values") == library_match.problem_numbers("The 3 values")
+    # the library's tables use the minus sign −, a model writes -; a list without spaces is still a list
+    assert library_match.problem_numbers("at −15 and −10") == library_match.problem_numbers("at -15 and -10")
+    assert lookup.numbers("101,94,33,56,122,83") == ["101", "94", "33", "56", "122", "83"]
+    assert lookup.numbers("20,000 parts and 1,234,567 more") == ["20000", "1234567"]
     # the library writes \le1 and \pm0.0100, a model writes \le 1 and \pm 0.0100
     assert library_match.problem_numbers(r"$0\le y\le1$, $2.4\pm0.0100$") == \
         library_match.problem_numbers(r"$0 \le y \le 1$, $2.4 \pm 0.0100$")

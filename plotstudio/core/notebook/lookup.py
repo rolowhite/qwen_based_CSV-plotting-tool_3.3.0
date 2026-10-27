@@ -38,7 +38,9 @@ _TEX_CMD = re.compile(r"\\[A-Za-z]+")
 _MENTION = re.compile(r"\b(?:Exercises?|Ex\.)\s*\d+\.\d+(?:\s*(?:and|,|–|-)\s*\d+\.\d+)*", re.I)
 _REF = re.compile(r"(\d+)\.(\d+)")
 _LABEL = re.compile(r"^\s*(?:\*\*)?(?:(?:Exercise|Ex\.?|Problem)\s*)?(\d{1,2})\.(\d{1,3})\b(?!\.\d)", re.I)
-_NUMBER = re.compile(r"(?<![\w.])(-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|-?\.\d+)(?:\s*/\s*(\d+))?(?![\w])")
+# 20,000 is one number, but inside a list written without spaces ("33,56,122,83") the commas separate values
+_NUMBER = re.compile(r"(?<![\w.])(-?(?:(?<!\d,)\d{1,3}(?:,\d{3})+(?!,\d)|\d+)(?:\.\d+)?|-?\.\d+)(?:\s*/\s*(\d+))?"
+                     r"(?![\w])")
 _WORD = re.compile(r"[a-z]+")
 
 
@@ -63,6 +65,7 @@ def numbers(text: str) -> List[str]:
     A mention of another exercise gives 'ex3.49'."""
     text = _FRAC_TEX.sub(lambda m: f" {m.group(1) or m.group(2)}/{m.group(3) or m.group(4)} ", text)
     text = _TEX_CMD.sub(" ", text)      # "\le1" and "\le 1" are the same 1 (a letter before a digit hides it)
+    text = text.replace("−", "-")  # the minus sign − (the library's tables) is the same as a hyphen-minus
     # "the data of Exercise 3.49" is not a value of this problem, but it tells 3.54 from 3.55: keep it as "ex3.49"
     out = [f"ex{int(a)}.{int(b)}" for m in _MENTION.finditer(text) for a, b in _REF.findall(m.group(0))]
     text = _MENTION.sub(" ", text)

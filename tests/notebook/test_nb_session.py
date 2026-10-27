@@ -61,6 +61,16 @@ def test_a_miss_reads_again_at_another_size_and_can_still_hit(index):
     assert session.second_size(1400) == ollama.LONG_SIDE_MIN
 
 
+def test_a_first_read_that_breaks_is_followed_by_the_second(index):
+    replies = [{"text": '{"problems": [', "done_reason": "length"}, _reply(("", MARBLES))]
+    with FakeOllama(MODELS, replies=replies) as fake:
+        answers, _ = _run(session.Turn(session.Source("p.png", _picture()), index, fake.url, pace=0))
+    assert "**Solution.**" in answers[0]
+    with FakeOllama(MODELS, replies=["not json", "still not json"]) as fake:
+        with pytest.raises(ollama.OllamaError, match="valid JSON"):       # both broke: said plainly
+            _run(session.Turn(session.Source("p.png", _picture()), index, fake.url, pace=0))
+
+
 def test_two_misses_give_the_neutral_sentence_and_what_couldnt_be_read(index):
     other = ("", "A die is rolled 4 times. Find the chance of two sixes.")
     replies = [_reply(other, unreadable=["the last line"]), _reply(other, unreadable=["the last line."])]

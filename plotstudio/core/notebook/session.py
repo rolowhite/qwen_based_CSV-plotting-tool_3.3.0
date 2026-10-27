@@ -115,7 +115,12 @@ class Turn:
         self.model, think = self._pick_model()
         image, hint = self.source.image, self.source.hint
         emit(("status", "Reading the problem…"))
-        first = reader.read(self.chat, self.model, image, hint, think)
+        try:
+            first = reader.read(self.chat, self.model, image, hint, think)
+        except ollama.NotReady:
+            raise
+        except ollama.OllamaError as exc:       # the reply looped or broke: the read at another size may not
+            first = reader.Reading(raw=f"{type(exc).__name__}: {exc}")
         self.reads.append(first)
         problems, hits = first.problems, [self._match(p) for p in first.problems]
         if problems and all(hits):

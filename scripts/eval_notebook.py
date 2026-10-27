@@ -49,7 +49,8 @@ def draw(browser: str, markdown: str, path: Path):
     """The problem drawn by the browser (KaTeX), cropped to the text."""
     from PIL import Image, ImageChops
 
-    html = render._page("problem", f'<main style="max-width:760px"><div>{render.markdown_html(markdown)}</div>'
+    # wide enough that a 12-column table is drawn whole (at 900 px the last column was cut off)
+    html = render._page("problem", f'<main style="max-width:1340px"><div>{render.markdown_html(markdown)}</div>'
                                    '</main>', dark=False).replace("var(--bg)", "#ffffff")
     with tempfile.TemporaryDirectory() as tmp:
         page = Path(tmp) / "p.html"
@@ -57,7 +58,7 @@ def draw(browser: str, markdown: str, path: Path):
         shot = Path(tmp) / "shot.png"
         # its own profile, so a running Edge (or a stuck earlier run) can't block this one
         subprocess.run([browser, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run",
-                        "--disable-extensions", f"--user-data-dir={Path(tmp) / 'profile'}", "--window-size=900,1600",
+                        "--disable-extensions", f"--user-data-dir={Path(tmp) / 'profile'}", "--window-size=1400,1800",
                         f"--screenshot={shot}", "--virtual-time-budget=3000", page.as_uri()],
                        check=True, capture_output=True, timeout=60)
         image = Image.open(shot).convert("RGB")
@@ -96,7 +97,7 @@ def run_one(e, image, index, url, model) -> dict:
     except Exception as exc:  # noqa: BLE001 - one failed picture is a result, not the end of the run
         error = f"{type(exc).__name__}: {exc}"
     seconds = round(time.perf_counter() - start, 1)
-    first = turn.reads[0].problems if turn.reads else []
+    first = next((r.problems for r in turn.reads if r.problems), [])     # a first read that broke has none
     read = first[0].markdown if first else ""
     sources = [a["from"] for a in turn.answers]
     return {"exercise": e.key, "reads": len(turn.reads), "seconds": seconds, "error": error,
