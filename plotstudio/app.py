@@ -367,7 +367,7 @@ class GalleryPage(ttk.Frame):
         notebook = ttk.Button(top, text="Notebook", image=t.icon_states("file", 16), compound="left",
                               style="Toggle.TButton", command=lambda: app.show("notebook"))
         notebook.pack(side="right", anchor="n", padx=(px(8), 0))
-        Tooltip(notebook, "Find a statistics problem in your own worked solutions (photo, PDF or typed)")
+        Tooltip(notebook, "Solve a statistics problem from a photo, a PDF or typed text")
         self.chip = tk.Frame(top, background=C["panel"])
         self.chip.pack(side="right", anchor="n")
 

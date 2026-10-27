@@ -14,7 +14,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from . import library_match, ollama, reader
 
@@ -31,9 +31,10 @@ class Source:
     image: object = None     # a PIL image: a picture, a screenshot, a PDF page or the marked part of one
     text: str = ""           # typed text: nothing to read
     hint: str = ""           # a digital PDF page's text layer
+    load: Optional[Callable[[], Tuple[object, str]]] = None    # gives (image, hint) in the worker: a PDF page
 
     def digest(self) -> str:
-        data = self.image.tobytes() if self.image is not None else self.text.encode("utf-8")
+        data = self.image.tobytes() if self.image is not None else (self.text or self.name).encode("utf-8")
         return hashlib.sha256(data).hexdigest()[:16]
 
 
@@ -59,14 +60,14 @@ class Turn:
     emit gets ("status", text), ("start", None), ("text", piece) and ("end", markdown) for each answer."""
 
     def __init__(self, source: Source, index=None, url: str = ollama.DEFAULT_URL, wanted_model: str = "",
-                 log_path: Optional[Path] = None, pace: float = PACE):
+                 log_path: Optional[Path] = None, pace: Optional[float] = None):
         self.source = source
         self.index = index
         self.chat = ollama.Chat(url)
         self.url = url
         self.wanted = wanted_model
         self.log_path = log_path
-        self.pace = pace
+        self.pace = PACE if pace is None else pace
         self.model = None
         self.reads: List[reader.Reading] = []
         self.answers: List[dict] = []
@@ -77,6 +78,8 @@ class Turn:
     def run(self, emit: Callable) -> List[str]:
         error = None
         try:
+            if self.source.load is not None:
+                self.source.image, self.source.hint = self.source.load()
             problems, hits = self._read(emit) if self.source.image is not None else self._typed()
             unreadable = self.reads[-1].unreadable if self.reads and all(r.unreadable for r in self.reads) else []
             emit(("status", "Solving…"))

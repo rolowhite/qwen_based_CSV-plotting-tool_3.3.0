@@ -41,11 +41,26 @@ def test_bigger_dpi_gives_a_bigger_picture_and_the_colour_is_used():
     assert max(small.get_flattened_data(), key=lambda px: px[3])[:3] == (255, 0, 0)
 
 
-def test_environments_raise_a_tex_error():
-    with pytest.raises(tex.TexError):
-        tex.png(r"F(x)=\begin{cases}0,&x<0\\1,&x\ge0\end{cases}")
-    with pytest.raises(tex.TexError):
-        tex.png(r"\frac{1}{")
+def _size(formula):
+    from PIL import Image
+    return Image.open(io.BytesIO(tex.png(formula, 12, 96, "#000000"))).size
+
+
+def test_environments_are_laid_out_as_grids():
+    one_row = _size(r"F(x)=\begin{cases}0,&x<0\end{cases}")
+    two_rows = _size(r"F(x)=\begin{cases}0,&x<0\\1,&x\ge0\end{cases}")
+    assert two_rows[1] > one_row[1] * 1.6
+    plain = _size(r"\begin{matrix}1&2\\3&4\end{matrix}")
+    bracketed = _size(r"\begin{bmatrix}1&2\\3&4\end{bmatrix}")
+    assert bracketed[0] > plain[0] and bracketed[1] >= plain[1]
+    pair = _size(r"X'X=\begin{bmatrix}10&59\\59&447\end{bmatrix},\qquad X'y=\begin{bmatrix}489\\3876\end{bmatrix}")
+    assert pair[0] > bracketed[0] * 2
+
+
+def test_what_mathtext_cant_draw_raises_a_tex_error():
+    for formula in (r"\frac{1}{", r"a\xrightarrow{n}b", r"\begin{cases}\begin{matrix}1\end{matrix}\end{cases}"):
+        with pytest.raises(tex.TexError):
+            tex.png(formula)
 
 
 def test_answer_page_draws_math_in_the_browser():

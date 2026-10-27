@@ -78,11 +78,6 @@ def numbers(text: str) -> List[str]:
     return out
 
 
-def number_spans(text: str) -> List[Tuple[int, int]]:
-    """(start, end) of each number in the text, for highlighting what the lookup compares."""
-    return [m.span(1) for m in _NUMBER.finditer(text)]
-
-
 def words(text: str) -> List[str]:
     text = _TEX_CMD.sub(" ", text.lower())
     out = []

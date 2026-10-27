@@ -1,13 +1,24 @@
-"""The real window: the Notebook page loads a library, finds a typed problem, steps through exercises, keeps a
-history, logs a wrong match and writes the solution page that the browser opens."""
+"""The real window: a pasted picture is read (a fake Ollama), the answer streams into the right pane with its math
+drawn, a stored and an unknown problem look the same, Ollama missing shows how to set it up, Stop and New chat.
+
+Replaces the 3.3 tests of the problem-text box, the match list, the history and Wrong match (all removed)."""
 import json
 import tkinter as tk
 
 import pytest
 
 import nb_fixtures as fx
+from fake_ollama import FakeOllama
 
 pytestmark = pytest.mark.gui
+
+MARBLES = ("A box holds 7 red and 5 blue marbles. Two marbles are drawn without replacement. "
+           "Find the probability that both are red.")
+VISION = {"vl": ["completion", "vision"]}
+
+
+def _reply(*problems):
+    return json.dumps({"problems": [{"label": l, "markdown": m} for l, m in problems], "unreadable": []})
 
 
 @pytest.fixture
@@ -17,9 +28,12 @@ def app(tmp_path, monkeypatch):
     except tk.TclError as exc:
         pytest.skip(f"no display: {exc}")
     import plotstudio.settings as settings
+    from plotstudio.core.notebook import session
     monkeypatch.setattr(settings, "PATH", tmp_path / ".csv_plot_studio.json")
+    monkeypatch.setattr(session, "PACE", 0.0)
     lib = fx.write_sample(tmp_path / "lib")
-    settings.PATH.write_text(json.dumps({"notebook_library": [str(lib)]}), encoding="utf-8")
+    settings.PATH.write_text(json.dumps({"notebook_library": [str(lib)],
+                                         "notebook_ollama_url": "http://127.0.0.1:9"}), encoding="utf-8")
     from plotstudio.app import App
     window = App()
     errors = []
@@ -29,7 +43,7 @@ def app(tmp_path, monkeypatch):
     window.on_close()
 
 
-def _wait(app, condition, timeout=15.0):
+def _wait(app, condition, timeout=20.0):
     import time
     end = time.time() + timeout
     while not condition():
@@ -39,59 +53,101 @@ def _wait(app, condition, timeout=15.0):
         time.sleep(0.02)
 
 
-def test_typed_problem_is_found_shown_logged_and_opened(app, tmp_path, monkeypatch):
-    from tkinter import simpledialog
-    import webbrowser
+def _ready(app, url):
+    app.cfg["notebook_ollama_url"] = url
+    app.show("notebook")
+    nb = app.notebook
+    _wait(app, lambda: nb.index is not None)
+    return nb
+
+
+def _picture():
+    from PIL import Image
+    return Image.new("RGB", (900, 300), "white")
+
+
+def _images(nb):
+    return [name for kind, name, _ in nb.answers.text.dump("1.0", "end", image=True) if kind == "image"]
+
+
+def test_a_pasted_picture_is_read_and_answered_in_the_right_pane(app, monkeypatch, tmp_path):
+    from PIL import ImageGrab
     from plotstudio import notebook_page
-
-    app.show("notebook")
-    nb = app.notebook
-    _wait(app, lambda: nb.index is not None)
-    assert "Sample 1st · 6 exercises" in nb.lib_button.cget("text")
-
-    nb.text.insert("1.0", "A box holds 7 red and 5 blue marbles. Two are drawn without replacement. "
-                          "Find the probability that both are red.")
-    nb._highlight()
-    assert len(nb.text.tag_ranges("num")) == 4          # 7 and 5, start and end each
-    nb.find()
-    assert nb.result.status == "match" and nb.current.number == "1.1"
-    assert "verified" in nb.badge.cget("text") and nb.badge.cget("style") == "Ok.TLabel"
-    assert app.cfg["notebook_history"][0]["exercise"] == "sample:1.1"
-
-    nb._step(1)
-    assert nb.current.number == "1.2" and "caution" in nb.badge.cget("text")
-
-    monkeypatch.setattr(simpledialog, "askstring", lambda *a, **k: "1.3")
-    nb.wrong_match()
-    entry = json.loads(notebook_page.feedback_path().read_text(encoding="utf-8").splitlines()[-1])
-    assert entry["shown"] == "sample:1.2" and entry["correct"] == "sample:1.3"
-    assert entry["candidates"][0] == {"exercise": "sample:1.1", "score": nb.result.best.score}
-    assert nb.current.number == "1.3"
-
-    opened = []
-    monkeypatch.setattr(webbrowser, "open", lambda url: opened.append(url) or True)
-    nb.open_solution()
-    _wait(app, lambda: opened)
-    assert opened[0].startswith("file:") and opened[0].endswith("/open.html")
+    with FakeOllama(VISION, replies=[_reply(("1.1", MARBLES))]) as fake:
+        nb = _ready(app, fake.url)
+        statuses = []
+        set_status = nb.set_status
+        monkeypatch.setattr(nb, "set_status", lambda text: statuses.append(text) or set_status(text))
+        monkeypatch.setattr(ImageGrab, "grabclipboard", lambda: _picture())
+        nb.paste_image()
+        assert nb.stop_btn.winfo_manager() == "pack" and nb.send_btn.instate(["disabled"])
+        _wait(app, lambda: nb._turn is None)
+    assert "Reading the problem…" in statuses and "Solving…" in statuses
+    shown = nb.answers.plain_text()
+    assert "Problem 1.1." in shown and "7 red and 5 blue" in shown and "Solution." in shown
+    assert _images(nb), "the formulas are drawn as pictures"
+    assert nb._thumbs and nb.stop_btn.winfo_manager() == ""
+    entry = json.loads(notebook_page.history_path().read_text(encoding="utf-8").splitlines()[-1])
+    assert entry["answers"][0]["from"] == "library:sample:1.1" and entry["source"] == "Screenshot"
     assert not app.errors
 
 
-def test_ties_ask_and_search_and_history_fill_the_list(app):
-    app.show("notebook")
-    nb = app.notebook
-    _wait(app, lambda: nb.index is not None)
-    nb.text.insert("1.0", "The weights of six parcels are given in kg. Find the sample mean.")
-    nb.find()
-    assert nb.result.status == "choose" and nb.current is None
-    assert len(nb.tree.get_children()) == 3
-    nb.tree.selection_set("1")
-    app.update()
-    assert nb.current is not None
-
-    nb.search.set_value("lamp")
-    nb._run_search()
-    assert nb.listed[0].number == "1.3"
-    nb.list_mode.set("history")
-    nb._mode_changed()
-    assert nb.tree.item("h0", "values")[0] == "picked?"
+def test_a_stored_and_an_unknown_problem_look_the_same(app):
+    nb = _ready(app, "http://127.0.0.1:9")
+    nb.submit(nb_session().Source("Typed", text=MARBLES))
+    _wait(app, lambda: nb._turn is None)
+    nb.submit(nb_session().Source("Typed", text="A die is rolled 4 times. Find the chance of two sixes."))
+    _wait(app, lambda: nb._turn is None)
+    shown = nb.answers.plain_text()
+    assert nb_session().NOT_YET in shown and "Solution." in shown
+    for word in ("library", "score", "match", "verified", "checker"):
+        assert word not in shown.lower()
+    assert len(nb.answers._windows) == 2            # Copy / Open in browser under each answer, nothing else
+    assert all(isinstance(w, tk.Frame) for w in nb.answers._windows)
+    assert len(nb.turns.body.winfo_children()) == 3      # the empty hint (hidden) and two bubbles
+    nb.new_chat()
+    assert nb.answers.items == [] and nb.empty.winfo_manager() == "pack"
     assert not app.errors
+
+
+def test_no_ollama_shows_how_to_set_it_up_and_typing_still_works(app):
+    nb = _ready(app, "http://127.0.0.1:9")
+    nb.submit(nb_session().Source("Screenshot", _picture()), _picture())
+    _wait(app, lambda: nb._turn is None)
+    assert any(item[0] == "setup" for item in nb.answers.items)
+    card = nb.answers._windows[-1]
+    texts = [w.cget("text") for w in card.winfo_children()]
+    assert "Reading pictures needs Ollama" in texts and any("ollama pull" in t for t in texts)
+    nb.entry.set_value(MARBLES)
+    nb.send_text()
+    _wait(app, lambda: nb._turn is None)
+    assert "Solution." in nb.answers.plain_text()
+    assert not app.errors
+
+
+def test_a_formula_mathtext_cant_draw_shows_its_source(app):
+    nb = _ready(app, "http://127.0.0.1:9")
+    nb.answers.add_turn(1)
+    nb.answers.begin()
+    nb.answers.end("Here $\\xrightarrow{x}$ fails and $x^2$ works.")
+    shown = nb.answers.plain_text()
+    assert "$\\xrightarrow{x}$" in shown and "x^2" not in shown and len(_images(nb)) == 1
+    app.toggle_theme()                              # drawn again in the other ink: still one picture, no error
+    assert len(_images(nb)) == 1 and "$\\xrightarrow{x}$" in nb.answers.plain_text()
+    assert not app.errors
+
+
+def test_stop_ends_a_slow_reading(app):
+    with FakeOllama(VISION, replies=[{"text": _reply(("", MARBLES)), "delay": 0.4}]) as fake:
+        nb = _ready(app, fake.url)
+        nb.submit(nb_session().Source("Screenshot", _picture()), _picture())
+        _wait(app, lambda: fake.requests)
+        nb.stop()
+        _wait(app, lambda: nb._turn is None, timeout=5)
+    assert "Stopped." in nb.answers.plain_text()
+    assert not app.errors
+
+
+def nb_session():
+    from plotstudio.core.notebook import session
+    return session

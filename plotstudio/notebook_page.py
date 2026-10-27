@@ -1,18 +1,21 @@
-"""Notebook: a picture (or the typed text) of a statistics problem -> the matching exercise in the user's own
-solution library -> its stored solution, shown in the browser with the math drawn by the bundled KaTeX.
+"""Notebook: give it a picture, a PDF page or the typed text of a statistics problem and it writes the worked
+solution, like a chat. Left: what you gave it, one bubble per turn. Right: the answers, streamed, with the math
+drawn by matplotlib's mathtext (Open in browser draws it with the bundled KaTeX).
 
-The work (reading the library, OCR, writing the solution pages) runs in worker threads; results come back
-through a queue.Queue that the window polls with after(). The library files are only read.
+Pictures are read by a local vision model in Ollama (core/notebook/reader.py); nothing asks you to check or fix
+the reading. The work runs in worker threads that report through a queue.Queue polled with after(). The
+solution library is only read.
 """
 from __future__ import annotations
 
+import base64
 import gc
-import json
 import queue
 import re
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -20,44 +23,403 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from . import APP_NAME, settings
 from .core.notebook import library as nb_library
 from .core.notebook import lookup as nb_lookup
-from .core.notebook import ocr as nb_ocr
-from .core.notebook import provenance, render
+from .core.notebook import ollama, reader, render, session, tex
+from .log import log_error
 from .theme import C
-from .widgets import AutoScrollbar, PlaceholderEntry, Tooltip
+from .widgets import AutoScrollbar, PlaceholderEntry, ScrollFrame, SmoothScroller, Tooltip
 
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
-HISTORY_LIMIT = 30
 GUTTER = 12
+THUMB = 240             # px: the long side of the picture in a bubble
+STREAM = object()       # marks a streamed event in the job queue (the job isn't finished yet)
 
 
 def notebook_dir() -> Path:
-    """Where the index cache, the solution pages and the feedback log live (next to the settings file)."""
+    """Where the index cache, the answer pages and the history live (next to the settings file)."""
     return settings.PATH.parent / ".csv_plot_studio" / "notebook"
 
 
-def feedback_path() -> Path:
-    return notebook_dir() / "notebook_feedback.jsonl"
+def history_path() -> Path:
+    return notebook_dir() / "notebook_history.jsonl"
 
 
-def plain_problem(e: nb_library.Exercise) -> str:
-    """The problem as plain text for the preview (the browser page shows it with the math drawn)."""
-    text = e.problem_md or e.solution_md[:600]
-    text = re.sub(r"(?m)^\|[-| :]+\|[ \t]*\n?", "", text)          # a Markdown table's |---|---| line
-    return text.replace("**Problem:**", "").replace("**", "").replace("$", "").strip()
+# =========================================================================================== answers ==
+class AnswerView(tk.Frame):
+    """The right pane: Markdown answers drawn into a read-only Text, each formula as a picture.
+
+    What it shows is a list of items, so a theme switch draws it all again: ("turn", n), ["answer", markdown,
+    finished], ("setup", message) and ("note", text, tag)."""
+
+    def __init__(self, master, page):
+        super().__init__(master, background=C["panel"])
+        self.page = page
+        t, px = page.app.theme, page.app.theme.px
+        self.t, self.px = t, px
+        # the reading text is one point bigger than the controls, like a document
+        self.font = {k: (t.f[k][0], t.f[k][1] + 1) + tuple(t.f[k][2:]) for k in ("base", "bold", "mono")}
+        self.text = tk.Text(self, wrap="word", font=self.font["base"], background=C["panel"], foreground=C["text"],
+                            relief="flat", borderwidth=0, highlightthickness=0, padx=px(6), pady=px(6),
+                            state="disabled", cursor="arrow", selectbackground=C["select"],
+                            inactiveselectbackground=C["select"], selectforeground=C["text"])
+        bar = AutoScrollbar(self, orient="vertical", command=self.text.yview)
+        self.text.configure(yscrollcommand=bar.set)
+        self.text.grid(row=0, column=0, sticky="nsew")
+        bar.grid(row=0, column=1, sticky="ns")
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+        self.text.smooth = SmoothScroller(self.text)
+        try:
+            self._md = render._markdown()
+        except render.RenderUnavailable as exc:
+            log_error("Notebook: answers are shown as plain text", exc)
+            self._md = None
+        self.items = []
+        self._images = {}          # (tex, display, ink) -> PhotoImage
+        self._failed = set()       # formulas mathtext couldn't draw (logged once each)
+        self._windows = []         # embedded buttons and cards, destroyed on a redraw
+        self._live = None          # the answer item being streamed
+        self._drawn = 0            # how much of its markdown is drawn as Markdown (the rest is plain text)
+        self._tables = 0
+        self.redraw()
+
+    # ----------------------------------------------------------------------------------------- public --
+    def clear(self):
+        self.items, self._live = [], None
+        self.redraw()
+
+    def add_turn(self, n):
+        self._add(("turn", n))
+
+    def begin(self):
+        self._live = ["answer", "", False]
+        self._drawn = 0
+        self._add(self._live)
+
+    def feed(self, piece):
+        if self._live is not None:
+            self._live[1] += piece
+            self._edit(lambda: self._advance(final=False))
+
+    def end(self, markdown):
+        if self._live is not None:
+            self._live[1], self._live[2] = markdown, True
+            self._edit(lambda: self._advance(final=True))
+            self._live = None
+
+    def finish(self):
+        """End the answer being streamed with what has arrived (after Stop)."""
+        if self._live is not None:
+            self.end(self._live[1])
+
+    def setup(self, message):
+        self._live = None
+        self._add(("setup", message))
+
+    def note(self, text, tag="muted"):
+        self._live = None
+        self._add(("note", text, tag))
+
+    def show_turn(self, n):
+        try:
+            self.text.yview(f"turn{n}")
+        except tk.TclError:
+            pass
+
+    def plain_text(self) -> str:
+        return self.text.get("1.0", "end-1c")
+
+    def on_theme(self):
+        self._images.clear()
+        self.text.configure(background=C["panel"], foreground=C["text"], selectbackground=C["select"],
+                            inactiveselectbackground=C["select"], selectforeground=C["text"])
+        self.redraw()
+
+    def redraw(self):
+        for w in self._windows:
+            w.destroy()
+        self._windows = []
+        self._tags()
+        self.text.configure(state="normal")
+        try:
+            self.text.delete("1.0", "end")
+            if not self.items:
+                self._insert("\n\n\nThe worked solution appears here.", ("empty",))
+            for item in self.items:
+                if item is self._live:
+                    self._drawn = 0
+                    self._advance(final=False)
+                else:
+                    self._draw_item(item)
+        finally:
+            self.text.configure(state="disabled")
+
+    # --------------------------------------------------------------------------------------- drawing --
+    def _tags(self):
+        px, f, r = self.px, self.t.f, self.font
+        body, size = r["base"][0], r["base"][1]
+        tg = self.text.tag_configure
+        tg("p", spacing3=px(8))
+        tg("h1", font=f["h2"], spacing1=px(10), spacing3=px(6))
+        tg("h2", font=f["h3"], spacing1=px(10), spacing3=px(6))
+        tg("h3", font=r["bold"], spacing1=px(8), spacing3=px(4))
+        tg("bold", font=r["bold"])
+        tg("italic", font=(body, size, "italic"))
+        tg("bolditalic", font=(r["bold"][0], size, "bold", "italic"))
+        tg("code", font=r["mono"], background=C["raised"])
+        tg("codeblock", font=r["mono"], background=C["raised"], lmargin1=px(10), lmargin2=px(10), spacing3=px(8))
+        tg("display", justify="center", spacing1=px(4), spacing3=px(10))
+        tg("li", lmargin1=px(6), lmargin2=px(26), tabs=(px(26),), spacing3=px(4))
+        tg("th", font=r["bold"])
+        tg("muted", foreground=C["muted"])
+        tg("error", foreground=C["danger"])
+        tg("gap", font=(body, 4), spacing1=px(14))
+        tg("empty", foreground=C["faint"], justify="center")
+
+    def _edit(self, work):
+        at_end = self.text.yview()[1] >= 0.999
+        self.text.configure(state="normal")
+        try:
+            work()
+        finally:
+            self.text.configure(state="disabled")
+        if at_end:
+            self.text.see("end")
+
+    def _add(self, item):
+        if not self.items:
+            self.items.append(item)
+            self.redraw()
+            return
+        self.items.append(item)
+        self._edit(lambda: self._draw_item(item))
+
+    def _insert(self, text, tags=()):
+        self.text.insert("end-1c", text, tags)
+
+    def _draw_item(self, item):
+        kind = item[0]
+        if kind == "turn":
+            if self.text.index("end-1c") != "1.0":
+                self._insert("\n", ("gap",))
+            self.text.mark_set(f"turn{item[1]}", "end-1c")
+            self.text.mark_gravity(f"turn{item[1]}", "left")
+        elif kind == "answer":
+            self._markdown(item[1])
+            if item[2]:
+                self._actions(item[1])
+        elif kind == "setup":
+            self._setup_card(item[1])
+        else:
+            self._insert(item[1] + "\n", (item[2], "p"))
+
+    def _advance(self, final):
+        """Draw the streamed answer's finished blocks as Markdown; show the unfinished rest as plain text."""
+        md = self._live[1]
+        if self.text.tag_ranges("pending"):
+            self.text.delete("pending.first", "pending.last")
+        cut = len(md) if final else _block_end(md, self._drawn)
+        if cut > self._drawn:
+            self._markdown(md[self._drawn:cut])
+            self._drawn = cut
+        if final:
+            self._actions(md)
+        elif md[self._drawn:].strip():
+            self._insert(md[self._drawn:].lstrip("\n"), ("pending", "p"))
+
+    def _markdown(self, md):
+        if self._md is None:
+            self._insert(md.strip("\n") + "\n", ("p",))
+            return
+        tokens = self._md.parse(md)
+        lists = []          # [ordered, next number] per open list
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i]
+            kind = tok.type
+            if kind == "heading_open":
+                tag = {"h1": "h1", "h2": "h2"}.get(tok.tag, "h3")
+                self._inline(tokens[i + 1].children or [], (tag,))
+                self._insert("\n", (tag,))
+                i += 3
+                continue
+            if kind == "paragraph_open":
+                block = ("li",) if lists else ("p",)
+                self._inline(tokens[i + 1].children or [], block)
+                self._insert("\n", block)
+                i += 3
+                continue
+            if kind in ("bullet_list_open", "ordered_list_open"):
+                lists.append([kind == "ordered_list_open", int(tok.attrGet("start") or 1)])
+            elif kind in ("bullet_list_close", "ordered_list_close"):
+                lists.pop()
+            elif kind == "list_item_open" and lists:
+                # shortcut: nested lists share one indent; give each depth its own if solutions need it
+                ordered, number = lists[-1]
+                lists[-1][1] += 1
+                self._insert(f"{number}.\t" if ordered else "•\t", ("li",))
+            elif kind == "math_block":
+                self._math(tok.content, True)
+            elif kind in ("fence", "code_block"):
+                self._insert(tok.content.rstrip("\n") + "\n", ("codeblock",))
+            elif kind == "table_open":
+                end = next((k for k in range(i, len(tokens)) if tokens[k].type == "table_close"), len(tokens) - 1)
+                self._table(tokens[i:end])
+                i = end
+            elif kind == "inline":
+                self._inline(tok.children or [], ("p",))
+                self._insert("\n", ("p",))
+            i += 1
+
+    def _inline(self, children, block):
+        bold = italic = False
+        for c in children:
+            kind = c.type
+            if kind == "text":
+                style = ("bolditalic",) if bold and italic else ("bold",) if bold else ("italic",) if italic else ()
+                self._insert(c.content, block + style)
+            elif kind in ("softbreak", "hardbreak"):
+                self._insert("\n", block)          # keep the author's lines: "(a) ...\n(b) ..."
+            elif kind in ("strong_open", "strong_close"):
+                bold = kind == "strong_open"
+            elif kind in ("em_open", "em_close"):
+                italic = kind == "em_open"
+            elif kind == "code_inline":
+                self._insert(c.content, block + ("code",))
+            elif kind == "math_inline":
+                self._math(c.content, False, block)
+            elif kind == "math_inline_double":
+                self._math(c.content, True, block)
+            elif c.content:
+                self._insert(c.content, block)
+
+    def _photo(self, source, display):
+        """The formula as a PhotoImage (cached), or None when mathtext can't draw it (logged once)."""
+        key = (source, display, C["text"])
+        if key not in self._images:
+            size = self.font["base"][1] * (1.15 if display else 1.0)
+            try:
+                data = tex.png(source, size, self.text.winfo_fpixels("1i"), C["text"])
+                self._images[key] = tk.PhotoImage(master=self.text, data=base64.b64encode(data))
+            except tex.TexError as exc:
+                if source not in self._failed:
+                    self._failed.add(source)
+                    log_error(f"Notebook: mathtext can't draw ${source}$", details=str(exc))
+                self._images[key] = None
+        return self._images[key]
+
+    def _math(self, source, display, block=()):
+        photo = self._photo(source, display)
+        if display and self.text.index("end-1c").split(".")[1] != "0":
+            self._insert("\n", block)
+        tags = block + (("display",) if display else ())
+        if photo is None:
+            fence = "$$" if display else "$"
+            self._insert(f"{fence}{source.strip()}{fence}", tags + ("code",))
+        else:
+            at = self.text.index("end-1c")
+            self.text.image_create(at, image=photo, align="center", padx=self.px(1))
+            for tag in tags:
+                self.text.tag_add(tag, at)
+        if display:
+            self._insert("\n", tags)
+
+    def _table(self, tokens):
+        rows, row, head = [], None, False
+        for tok in tokens:
+            if tok.type == "thead_open":
+                head = True
+            elif tok.type == "thead_close":
+                head = False
+            elif tok.type == "tr_open":
+                row = []
+            elif tok.type == "inline" and row is not None:
+                row.append(tok.children or [])
+            elif tok.type == "tr_close" and row is not None:
+                rows.append((row, head))
+                row = None
+        if not rows:
+            return
+        fonts = {False: tkfont.Font(root=self.text, font=self.font["base"]),
+                 True: tkfont.Font(root=self.text, font=self.font["bold"])}
+        mono = tkfont.Font(root=self.text, font=self.font["mono"])
+
+        def width(children, bold):
+            w = 0
+            for c in children:
+                if c.type in ("math_inline", "math_inline_double"):
+                    photo = self._photo(c.content, False)
+                    w += photo.width() + self.px(2) if photo is not None else mono.measure(f"${c.content}$")
+                elif c.type == "code_inline":
+                    w += mono.measure(c.content)
+                elif c.content:
+                    w += fonts[bold].measure(c.content)
+            return w
+
+        columns = max(len(r) for r, _ in rows)
+        widths = [max((width(r[k], h) for r, h in rows if k < len(r)), default=0) for k in range(columns)]
+        gap, x, stops = self.px(18), self.px(6), []
+        for w in widths[:-1]:
+            x += w + gap
+            stops.append(x)
+        self._tables += 1
+        name = f"table{self._tables}"
+        self.text.tag_configure(name, lmargin1=self.px(6), lmargin2=self.px(6), tabs=tuple(stops) or "",
+                                spacing1=self.px(2), spacing3=self.px(2))
+        for k, (cells, is_head) in enumerate(rows):
+            for j, cell in enumerate(cells):
+                if j:
+                    self._insert("\t", (name,))
+                self._inline(cell, (name,) + (("th",) if is_head else ()))
+            self._insert("\n", (name,))
+        self._insert("\n", ("gap",))
+
+    def _actions(self, md):
+        t, px = self.t, self.px
+        row = tk.Frame(self.text, background=C["panel"])
+        ttk.Button(row, text="Copy", image=t.icon("copy", "muted", 14), compound="left", style="Ghost.TButton",
+                   command=lambda: self._copy(md)).pack(side="left")
+        ttk.Button(row, text="Open in browser", image=t.icon("external", "muted", 14), compound="left",
+                   style="Ghost.TButton", command=lambda: self.page.open_in_browser(md)).pack(side="left",
+                                                                                         padx=(px(4), 0))
+        self._windows.append(row)
+        self.text.window_create("end-1c", window=row)
+        self._insert("\n", ("p",))
+
+    def _copy(self, md):
+        self.clipboard_clear()
+        self.clipboard_append(md)
+        self.page.set_status("Copied the answer (Markdown with LaTeX).")
+
+    def _setup_card(self, message):
+        t, px = self.t, self.px
+        card = ttk.Frame(self.text, style="Well.TFrame", padding=(px(16), px(12)))
+        width = px(440)
+        ttk.Label(card, text="Reading pictures needs Ollama", style="Raised.Bold.TLabel").pack(anchor="w")
+        ttk.Label(card, text=message, style="Raised.Muted.TLabel", wraplength=width, justify="left").pack(
+            anchor="w", pady=(px(4), px(8)))
+        for line in ("1.  Install Ollama from ollama.com (free; it runs on this PC, offline).",
+                     f"2.  In a terminal: {ollama.PULL_HINT}   (about 6 GB, once)"):
+            ttk.Label(card, text=line, style="Raised.TLabel", wraplength=width, justify="left").pack(anchor="w")
+        ttk.Label(card, text="Typed problems work without it.", style="Raised.Faint.TLabel").pack(
+            anchor="w", pady=(px(8), 0))
+        ttk.Button(card, text="Check again", style="Accent.TButton", command=self.page.check_models).pack(
+            anchor="w", pady=(px(10), 0))
+        self._windows.append(card)
+        self.text.window_create("end-1c", window=card)
+        self._insert("\n", ("p",))
 
 
-def log_feedback(text: str, shown, correct: str, candidates) -> dict:
-    """One line in notebook_feedback.jsonl: what was read, what was shown, what the user says is right."""
-    entry = {"time": time.strftime("%Y-%m-%dT%H:%M:%S"), "text": text,
-             "shown": shown.key if shown is not None else None, "correct": correct or None,
-             "candidates": [{"exercise": c.exercise.key, "score": c.score} for c in candidates]}
-    path = feedback_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    return entry
+def _block_end(md: str, start: int) -> int:
+    """Where the finished Markdown blocks end: after the last blank line past `start` that is not inside $$."""
+    for m in reversed(list(re.finditer(r"\n[ \t]*\n", md))):
+        if m.start() < start:
+            break
+        if md.count("$$", 0, m.start()) % 2 == 0:
+            return m.end()
+    return start
 
 
+# ============================================================================================== page ==
 class NotebookPage(ttk.Frame):
     def __init__(self, master, app):
         super().__init__(master)
@@ -66,16 +428,18 @@ class NotebookPage(ttk.Frame):
         g = px(GUTTER)
         self.library = None
         self.index = None
-        self.result = None          # the last LookupResult
-        self.current = None         # the Exercise in the detail panel
-        self.listed = []            # what the list shows: exercises, in order
-        self.image = None           # PIL image of the problem (a picture, or the PDF page)
-        self.pdf = None             # open PdfDoc
+        self.pdf = None             # open PdfDoc in the page picker
         self.pdf_index = 0
         self.view = None            # how the PDF page picture was drawn
-        self.crop = None            # (x0, y0, x1, y1) in image pixels
+        self.image = None           # the page picture in the picker
+        self.crop = None            # (x0, y0, x1, y1) in picture pixels
         self._shown_scale = 1.0
+        self._offset = (0, 0)
         self._photo = None
+        self._thumbs = []           # PhotoImages of the bubbles
+        self._turn = None           # the running session.Turn
+        self._turns = 0
+        self._models = None         # [(name, capabilities)] from Ollama, None until checked
         self._jobs = queue.Queue()
         self._pending = 0
         self._token = {}
@@ -89,8 +453,8 @@ class NotebookPage(ttk.Frame):
         from .app import back_button, theme_button
         back_button(inner, app).pack(side="left")
         ttk.Label(inner, text="Notebook", style="Panel.H3.TLabel").pack(side="left", padx=(px(14), 0))
-        ttk.Label(inner, text="Find a problem in your own solutions", style="Panel.Muted.TLabel").pack(
-            side="left", padx=(px(10), 0))
+        ttk.Label(inner, text="Solve a statistics problem from a photo, a PDF or text",
+                  style="Panel.Muted.TLabel").pack(side="left", padx=(px(10), 0))
         theme_button(inner, app).pack(side="right")
         self.lib_button = ttk.Menubutton(inner, text="Library: none", style="Ghost.TMenubutton")
         self.lib_button.pack(side="right", padx=(0, px(8)))
@@ -103,15 +467,25 @@ class NotebookPage(ttk.Frame):
         menu.add_command(label="Forget the library list", command=self.forget_library)
         self.lib_button["menu"] = menu
         Tooltip(self.lib_button, "The folders or .md files with your worked solutions (only read, never changed)")
+        self.model_var = tk.StringVar(value=app.cfg.get("notebook_reader_model") or "")
+        self.model_button = ttk.Menubutton(inner, text="Model", style="Ghost.TMenubutton")
+        self.model_button.pack(side="right", padx=(0, px(4)))
+        self.model_menu = t.menu(self.model_button)
+        self.model_button["menu"] = self.model_menu
+        Tooltip(self.model_button, "The local model (Ollama) that reads pictures")
+        self.new_btn = ttk.Button(inner, text="New chat", image=t.icon_states("plus", 16), compound="left",
+                                  style="Ghost.TButton", command=self.new_chat)
+        self.new_btn.pack(side="right", padx=(0, px(4)))
 
         body = tk.Frame(self, background=C["bg"])
         body.pack(fill="both", expand=True, padx=g, pady=g)
         body.columnconfigure(0, weight=5, uniform="nb")
-        body.columnconfigure(1, weight=6, uniform="nb")
+        body.columnconfigure(1, weight=7, uniform="nb")
         body.rowconfigure(0, weight=1)
         self._build_problem(body, t, px).grid(row=0, column=0, sticky="nsew", padx=(0, px(6)))
-        self._build_result(body, t, px).grid(row=0, column=1, sticky="nsew", padx=(px(6), 0))
-        self._set_detail(None)
+        self._build_answer(body, t, px).grid(row=0, column=1, sticky="nsew", padx=(px(6), 0))
+        app.bind_all("<Control-v>", self._ctrl_v, add="+")
+        self._fill_model_menu()
 
     # ------------------------------------------------------------------------------------------- layout --
     def _card(self, parent, px):
@@ -122,180 +496,134 @@ class NotebookPage(ttk.Frame):
 
     def _build_problem(self, parent, t, px):
         card, box = self._card(parent, px)
-        ttk.Label(box, text="Problem", style="Panel.H3.TLabel").pack(anchor="w")
-        row = tk.Frame(box, background=C["panel"])
-        row.pack(fill="x", pady=(px(8), px(6)))
-        self.open_btn = ttk.Button(row, text="Open image or PDF…", image=t.icon("folder", "on_accent", 16),
-                                   compound="left", style="Accent.TButton", command=self.open_dialog)
+        ttk.Label(box, text="Your problem", style="Panel.H3.TLabel").pack(anchor="w", side="top")
+
+        # composer (bottom) -----------------------------------------------------------------------------
+        composer = tk.Frame(box, background=C["panel"])
+        composer.pack(side="bottom", fill="x", pady=(px(8), 0))
+        row = tk.Frame(composer, background=C["panel"])
+        row.pack(fill="x")
+        self.entry = PlaceholderEntry(row, placeholder="Or type a problem…", style="Panel.TEntry")
+        self.entry.pack(side="left", fill="x", expand=True)
+        self.entry.bind("<Return>", lambda e: (self.send_text(), "break")[1])
+        self.entry.bind("<<Paste>>", self._entry_paste)
+        self.send_btn = ttk.Button(row, image=t.icon("arrow", "on_accent", 16), style="Accent.TButton",
+                                   command=self.send_text)
+        self.send_btn.pack(side="left", padx=(px(6), 0))
+        Tooltip(self.send_btn, "Solve the typed problem (Enter)")
+        buttons = tk.Frame(composer, background=C["panel"])
+        buttons.pack(fill="x", pady=(px(8), 0))
+        self.open_btn = ttk.Button(buttons, text="Open image or PDF…", image=t.icon("folder", "muted", 16),
+                                   compound="left", command=self.open_dialog)
         self.open_btn.pack(side="left")
-        self.paste_btn = ttk.Button(row, text="Paste screenshot", image=t.icon("image", "muted", 16),
+        self.paste_btn = ttk.Button(buttons, text="Paste screenshot", image=t.icon("image", "muted", 16),
                                     compound="left", command=self.paste_image)
         self.paste_btn.pack(side="left", padx=(px(6), 0))
-        Tooltip(self.paste_btn, "Read a problem from a screenshot on the clipboard (Ctrl+Shift+V)")
-        self.read_btn = ttk.Button(row, text="Read text", command=self.read_text)
-        self.read_btn.pack(side="left", padx=(px(6), 0))
-        Tooltip(self.read_btn, "Read the picture (or the marked part of it) into the text box")
-        self.page_bar = tk.Frame(row, background=C["panel"])
-        ttk.Button(self.page_bar, image=t.icon_states("chevron_left", 16), style="Icon.TButton",
-                   command=lambda: self.show_pdf_page(self.pdf_index - 1)).pack(side="left")
-        self.page_label = ttk.Label(self.page_bar, style="Panel.Muted.TLabel")
-        self.page_label.pack(side="left", padx=px(4))
-        ttk.Button(self.page_bar, image=t.icon_states("chevron_right", 16), style="Icon.TButton",
-                   command=lambda: self.show_pdf_page(self.pdf_index + 1)).pack(side="left")
+        Tooltip(self.paste_btn, "Solve the screenshot on the clipboard (Ctrl+V)")
+        self.note_label = ttk.Label(box, style="Panel.Muted.TLabel", justify="left", wraplength=px(420))
+        self.note_label.pack(side="bottom", anchor="w", fill="x")
 
-        self.canvas = tk.Canvas(box, height=px(250), background=C["field"], highlightthickness=1,
+        # PDF page picker (shown above the composer while a PDF is open) ---------------------------------
+        self.picker = ttk.Frame(box, style="Well.TFrame", padding=(px(10), px(8)))
+        top = tk.Frame(self.picker, background=C["raised"])
+        top.pack(fill="x")
+        ttk.Button(top, image=t.icon_states("chevron_left", 16), style="Icon.TButton",
+                   command=lambda: self.show_pdf_page(self.pdf_index - 1)).pack(side="left")
+        self.page_label = ttk.Label(top, style="Raised.Muted.TLabel")
+        self.page_label.pack(side="left", padx=px(4))
+        ttk.Button(top, image=t.icon_states("chevron_right", 16), style="Icon.TButton",
+                   command=lambda: self.show_pdf_page(self.pdf_index + 1)).pack(side="left")
+        close = ttk.Button(top, image=t.icon_states("close", 16), style="Icon.TButton", command=self._close_pdf)
+        close.pack(side="right")
+        Tooltip(close, "Close the PDF")
+        self.canvas = tk.Canvas(self.picker, height=px(260), background=C["field"], highlightthickness=1,
                                 highlightbackground=C["border_strong"], borderwidth=0, cursor="crosshair")
-        self.canvas.pack(fill="both", expand=True)
+        self.canvas.pack(fill="both", expand=True, pady=(px(6), px(6)))
         self.canvas.bind("<Configure>", lambda e: self._draw_image())
         self.canvas.bind("<ButtonPress-1>", self._crop_start)
         self.canvas.bind("<B1-Motion>", self._crop_drag)
         self.canvas.bind("<ButtonRelease-1>", self._crop_end)
         self.canvas.bind("<Double-Button-1>", lambda e: self._clear_crop())
-        self.status = ttk.Label(box, style="Panel.Muted.TLabel", justify="left", wraplength=px(460))
-        self.status.pack(anchor="w", fill="x", pady=(px(6), 0))
+        bottom = tk.Frame(self.picker, background=C["raised"])
+        bottom.pack(fill="x")
+        self.solve_btn = ttk.Button(bottom, text="Solve this page", style="Accent.TButton", command=self.solve_pdf)
+        self.solve_btn.pack(side="right")
+        ttk.Label(bottom, text="Drag around one problem to solve only that one.", style="Raised.Faint.TLabel").pack(
+            side="left")
 
-        label_row = tk.Frame(box, background=C["panel"])
-        label_row.pack(fill="x", pady=(px(10), px(4)))
-        ttk.Label(label_row, text="Problem text", style="Section.TLabel").pack(side="left")
-        ttk.Label(label_row, text="Fix what was misread, then Find (Ctrl+Enter). Numbers are highlighted.",
-                  style="Panel.Faint.TLabel").pack(side="left", padx=(px(8), 0))
-        holder = tk.Frame(box, background=C["panel"])
-        holder.pack(fill="both", expand=True)
-        self.text = tk.Text(holder, height=8, wrap="word", font=t.f["base"], background=C["field"],
-                            foreground=C["text"], insertbackground=C["text"], relief="flat", borderwidth=0,
-                            highlightthickness=1, highlightbackground=C["border_strong"],
-                            highlightcolor=C["accent"], padx=px(10), pady=px(8), undo=True)
-        bar = AutoScrollbar(holder, orient="vertical", command=self.text.yview)
-        self.text.configure(yscrollcommand=bar.set)
-        self.text.grid(row=0, column=0, sticky="nsew")
-        bar.grid(row=0, column=1, sticky="ns")
-        holder.rowconfigure(0, weight=1)
-        holder.columnconfigure(0, weight=1)
-        self._tag_numbers()
-        self.text.bind("<KeyRelease>", lambda e: self._highlight_later(), add="+")
-        self.text.bind("<<Paste>>", lambda e: self.after(10, self._highlight), add="+")
-        self.text.bind("<Control-Return>", lambda e: (self.find(), "break")[1])
-
-        actions = tk.Frame(box, background=C["panel"])
-        actions.pack(fill="x", pady=(px(8), 0))
-        self.find_btn = ttk.Button(actions, text="Find in library", image=t.icon("search", "on_accent", 16),
-                                   compound="left", style="Accent.TButton", command=self.find)
-        self.find_btn.pack(side="left")
-        ttk.Button(actions, text="Clear", command=self.clear).pack(side="left", padx=(px(6), 0))
-        self.progress = ttk.Progressbar(actions, mode="indeterminate", length=px(120))
+        # the turns ---------------------------------------------------------------------------------------
+        self.turns = ScrollFrame(box, t, bg=C["panel"])
+        self.turns.pack(side="top", fill="both", expand=True, pady=(px(8), 0))
+        self.empty = tk.Frame(self.turns.body, background=C["panel"])
+        self.empty.pack(fill="x", pady=(px(60), 0))
+        tk.Label(self.empty, image=t.icon("image", "faint", 32), background=C["panel"]).pack()
+        tk.Label(self.empty, text="Open or paste a picture of a problem", background=C["panel"],
+                 foreground=C["text"], font=t.f["bold"]).pack(pady=(px(8), px(2)))
+        tk.Label(self.empty, text="A photo, a screenshot (Ctrl+V) or a PDF page.\nThe worked solution appears on "
+                                  "the right.", background=C["panel"], foreground=C["muted"], font=t.f["small"],
+                 justify="center").pack()
         return card
 
-    def _build_result(self, parent, t, px):
+    def _build_answer(self, parent, t, px):
         card, box = self._card(parent, px)
         top = tk.Frame(box, background=C["panel"])
         top.pack(fill="x")
-        self.list_mode = tk.StringVar(value="matches")
-        for value, text in (("matches", "Best matches"), ("search", "Search"), ("history", "History")):
-            ttk.Radiobutton(top, text=text, value=value, variable=self.list_mode, style="Chip.TRadiobutton",
-                            command=self._mode_changed).pack(side="left", padx=(0, px(2)))
-        self.search = PlaceholderEntry(top, placeholder="Search: 3.13 or words", width=26,
-                                       style="Panel.Search.TEntry")
-        self.search.pack(side="right")
-        self.search.var.trace_add("write", lambda *_: self._search_later())
-        self.search.bind("<FocusIn>", lambda e: self.list_mode.set("search") or self._mode_changed(), add="+")
-
-        self.banner = ttk.Label(box, style="Panel.Muted.TLabel", justify="left", wraplength=px(560))
-        self.banner.pack(anchor="w", fill="x", pady=(px(8), px(4)))
-        listbox = tk.Frame(box, background=C["panel"])
-        listbox.pack(fill="x")
-        self.tree = ttk.Treeview(listbox, columns=("ex", "score", "text"), show="headings", height=5,
-                                 selectmode="browse")
-        for col, text, width, stretch in (("ex", "Exercise", px(80), False), ("score", "Score", px(64), False),
-                                          ("text", "Problem", px(300), True)):
-            self.tree.heading(col, text=text, anchor="w")
-            self.tree.column(col, width=width, minwidth=width, stretch=stretch, anchor="w")
-        bar = AutoScrollbar(listbox, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=bar.set)
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        bar.grid(row=0, column=1, sticky="ns")
-        listbox.columnconfigure(0, weight=1)
-        self.tree.bind("<<TreeviewSelect>>", self._picked)
-
-        ttk.Separator(box).pack(fill="x", pady=px(12))
-        self.title = ttk.Label(box, style="Panel.H2.TLabel")
-        self.title.pack(anchor="w")
-        self.meta = ttk.Label(box, style="Panel.Muted.TLabel", justify="left", wraplength=px(560))
-        self.meta.pack(anchor="w", fill="x", pady=(px(2), px(6)))
-        self.badge = ttk.Label(box, style="Ok.TLabel", justify="left", wraplength=px(560))
-        self.badge.pack(anchor="w", fill="x")
-        holder = tk.Frame(box, background=C["panel"])
-        holder.pack(fill="both", expand=True, pady=(px(8), 0))
-        self.preview = tk.Text(holder, height=8, wrap="word", font=t.f["base"], background=C["raised"],
-                               foreground=C["text"], relief="flat", borderwidth=0, highlightthickness=0,
-                               padx=px(12), pady=px(10), state="disabled", cursor="arrow")
-        pbar = AutoScrollbar(holder, orient="vertical", command=self.preview.yview, style="Raised.Vertical.TScrollbar")
-        self.preview.configure(yscrollcommand=pbar.set)
-        self.preview.grid(row=0, column=0, sticky="nsew")
-        pbar.grid(row=0, column=1, sticky="ns")
-        holder.rowconfigure(0, weight=1)
-        holder.columnconfigure(0, weight=1)
-
-        actions = tk.Frame(box, background=C["panel"])
-        actions.pack(fill="x", pady=(px(10), 0))
-        self.solution_btn = ttk.Button(actions, text="Open solution", image=t.icon("external", "on_accent", 16),
-                                       compound="left", style="Accent.TButton", command=self.open_solution)
-        self.solution_btn.pack(side="left")
-        Tooltip(self.solution_btn, "Show the stored solution in your browser (offline; the math is drawn there)")
-        self.prev_btn = ttk.Button(actions, image=t.icon_states("chevron_left", 16), style="Icon.TButton",
-                                   command=lambda: self._step(-1))
-        self.prev_btn.pack(side="left", padx=(px(8), 0))
-        Tooltip(self.prev_btn, "Previous exercise")
-        self.next_btn = ttk.Button(actions, image=t.icon_states("chevron_right", 16), style="Icon.TButton",
-                                   command=lambda: self._step(1))
-        self.next_btn.pack(side="left")
-        Tooltip(self.next_btn, "Next exercise")
-        self.wrong_btn = ttk.Button(actions, text="Wrong match", command=self.wrong_match)
-        self.wrong_btn.pack(side="right")
-        Tooltip(self.wrong_btn, "Tell the Notebook which exercise this really is (saved locally to improve matching)")
+        ttk.Label(top, text="Solution", style="Panel.H3.TLabel").pack(side="left")
+        self.stop_btn = ttk.Button(top, text="Stop", image=t.icon("close", "muted", 14), compound="left",
+                                   style="Small.TButton", command=self.stop)
+        self.progress = ttk.Progressbar(top, mode="indeterminate", length=px(90))
+        self.status = ttk.Label(top, style="Panel.Muted.TLabel")
+        self.status.pack(side="right", padx=(px(10), 0))
+        self.answers = AnswerView(box, self)
+        self.answers.pack(fill="both", expand=True, pady=(px(8), 0))
         return card
 
     # ---------------------------------------------------------------------------------------- page hooks --
     def on_show(self):
         if self.library is None and not self._loading:
             self.reload_library()
-
-    def on_theme(self):
-        self._tag_numbers()
-
-    def _tag_numbers(self):
-        self.text.tag_configure("num", background=C["accent_soft"], foreground=C["accent"])
+        if self._models is None:
+            self.check_models(quiet=True)
 
     # ---------------------------------------------------------------------------------------- workers --
-    def _run(self, kind, work, done):
-        """Run `work()` in a thread; `done(result, error)` runs on the Tk thread. A newer job of the same kind
-        makes the older one's result be ignored."""
+    def _run(self, kind, work, done, on_event=None):
+        """Run `work()` in a thread (`work(emit)` when `on_event` is given: emit(event) calls on_event(event)
+        on the Tk thread); `done(result, error)` runs on the Tk thread. A newer job of the same kind makes the
+        older one's results be ignored."""
         token = self._token[kind] = self._token.get(kind, 0) + 1
+
+        def emit(event):
+            self._jobs.put((kind, token, on_event, event, STREAM))
 
         def target():
             try:
-                self._jobs.put((kind, token, done, work(), None))
-            except Exception as exc:  # noqa: BLE001 - handed to `done`, which shows it
+                self._jobs.put((kind, token, done, work(emit) if on_event else work(), None))
+            except BaseException as exc:  # noqa: BLE001 - handed to `done`, which shows it
                 self._jobs.put((kind, token, done, None, exc))
 
         self._pending += 1
         if self._pending == 1:
-            self.progress.pack(side="left", padx=(self.app.theme.px(12), 0))
+            self.progress.pack(side="right", padx=(self.app.theme.px(8), 0))
             self.progress.start(12)
-            self.after(60, self._drain)
+            self.after(40, self._drain)
         gc.collect()      # free dead Tk objects here: Tk must not delete them from the worker thread
         threading.Thread(target=target, daemon=True).start()
 
     def _drain(self):
         while True:
             try:
-                kind, token, done, result, error = self._jobs.get_nowait()
+                kind, token, handler, result, error = self._jobs.get_nowait()
             except queue.Empty:
                 break
+            if error is STREAM:
+                if token == self._token.get(kind):
+                    handler(result)
+                continue
             self._pending -= 1
             if token == self._token.get(kind):
-                done(result, error)
+                handler(result, error)
         if self._pending > 0:
-            self.after(60, self._drain)
+            self.after(40, self._drain)
         else:
             self.progress.stop()
             self.progress.pack_forget()
@@ -338,6 +666,7 @@ class NotebookPage(ttk.Frame):
         self._loading = False
         if error is not None:
             self.lib_button.configure(text="Library: error")
+            log_error("Notebook: couldn't read the solutions library", error)
             messagebox.showerror(APP_NAME, f"Couldn't read the solutions library:\n{error}", parent=self)
             return
         self.library, self.index = lib, nb_lookup.Index(lib)
@@ -345,14 +674,6 @@ class NotebookPage(ttk.Frame):
         name = ", ".join(f"{b.title()} {ed}".strip() for b, ed in books) or "empty"
         notes = f" · {len(lib.problems)} notes" if lib.problems else ""
         self.lib_button.configure(text=f"Library: {name} · {len(lib.exercises)} exercises{notes}")
-        if not lib.exercises:
-            self._set_banner("No solutions loaded yet. Use Library ▾ › Add a solutions folder… (your .md files "
-                             "are only read, never changed). Typed text can be searched once a library is loaded.",
-                             "Warn.TLabel")
-        else:
-            self._set_banner("Open or paste a picture of a problem, or type it, then Find.")
-        if self.list_mode.get() != "matches":
-            self._mode_changed()
 
     def show_load_notes(self):
         if self.library is None or not self.library.problems:
@@ -361,6 +682,52 @@ class NotebookPage(ttk.Frame):
         lines = [str(p) for p in self.library.problems[:40]]
         more = len(self.library.problems) - len(lines)
         messagebox.showinfo(APP_NAME, "\n".join(lines) + (f"\n… and {more} more" if more > 0 else ""), parent=self)
+
+    # ------------------------------------------------------------------------------------------- models --
+    def _url(self):
+        return self.app.cfg.get("notebook_ollama_url") or ollama.DEFAULT_URL
+
+    def check_models(self, quiet=False):
+        url = self._url()
+        self._run("models", lambda: ollama.models(url), lambda found, error: self._models_found(found, error, quiet))
+
+    def _models_found(self, found, error, quiet):
+        if error is not None:
+            self._models = []
+            if not isinstance(error, ollama.OllamaError):
+                log_error("Notebook: couldn't ask Ollama for its models", error)
+            if not quiet:
+                self.answers.setup(str(error))
+        else:
+            self._models = found
+            if not quiet:
+                vision = [n for n, caps in found if "vision" in caps]
+                self.set_status(f"Ready: {ollama.pick(found, 'vision', self.model_var.get())}" if vision else "")
+                if not vision:
+                    self.answers.setup("Ollama is running, but none of its models can read pictures.")
+        self._fill_model_menu()
+
+    def _fill_model_menu(self):
+        menu = self.model_menu
+        menu.delete(0, "end")
+        found = self._models or []
+        vision = [n for n, caps in found if "vision" in caps]
+        chosen = ollama.pick(found, "vision", self.model_var.get())
+        if chosen:
+            self.model_var.set(chosen)
+        for name in vision:
+            menu.add_radiobutton(label=name, value=name, variable=self.model_var, command=self._model_chosen)
+        if not vision:
+            menu.add_command(label="Looking for models…" if self._models is None else
+                             "No picture-reading model found", state="disabled")
+        menu.add_separator()
+        menu.add_command(label="Check again", command=self.check_models)
+        self.model_button.configure(text=chosen or "Model")
+
+    def _model_chosen(self):
+        self.app.cfg["notebook_reader_model"] = self.model_var.get()
+        settings.save(self.app.cfg)
+        self.model_button.configure(text=self.model_var.get())
 
     # ------------------------------------------------------------------------------------------- input --
     def open_dialog(self):
@@ -374,8 +741,8 @@ class NotebookPage(ttk.Frame):
 
     def open_path(self, path, password=None):
         path = Path(path)
-        self._close_pdf()
         if path.suffix.lower() == ".pdf":
+            self._close_pdf()
             from .core.pdf_import.inspect import PasswordNeeded, PdfDoc, PdfError, WrongPassword
             try:
                 self.pdf = PdfDoc(path, password=password, max_mb=50)
@@ -387,87 +754,120 @@ class NotebookPage(ttk.Frame):
                     self.open_path(path, answer)
                 return
             except (PdfError, OSError) as exc:
-                self._set_status(str(exc) or type(exc).__name__, "Error.TLabel")
+                self._note(str(exc) or type(exc).__name__, "Error.TLabel")
                 return
+            self.picker.pack(side="bottom", fill="both", pady=(self.app.theme.px(8), 0), before=self.note_label)
             self.show_pdf_page(0)
             return
         if path.suffix.lower() not in IMAGE_TYPES:
-            self._set_status("Use a picture (PNG, JPG, WEBP …) or a PDF.", "Error.TLabel")
+            self._note("Use a picture (PNG, JPG, WEBP …) or a PDF.", "Error.TLabel")
             return
         try:
             from PIL import Image
-            if path.stat().st_size > nb_ocr.MAX_IMAGE_BYTES:
+            if path.stat().st_size > reader.MAX_IMAGE_BYTES:
                 raise ValueError("This image is too large. The maximum supported size is 50 MB.")
             with Image.open(path) as im:
                 im.load()
                 image = im.convert("RGB")
         except Exception as exc:  # noqa: BLE001 - shown to the user
-            self._set_status(f"Couldn't open {path.name}: {exc}", "Error.TLabel")
+            self._note(f"Couldn't open {path.name}: {exc}", "Error.TLabel")
             return
-        self._set_image(image, f"{path.name}. Drag on it to read only one problem, then Read text.")
-        self.read_text()
+        self.submit(session.Source(path.name, image), image)
+
+    def _clipboard_picture(self):
+        """What the clipboard holds: a PIL image, a path of a picture or PDF, or None."""
+        from PIL import Image, ImageGrab
+        grabbed = ImageGrab.grabclipboard()
+        if isinstance(grabbed, list):
+            return next((Path(p) for p in grabbed if Path(p).suffix.lower() in IMAGE_TYPES | {".pdf"}), None)
+        return grabbed.convert("RGB") if isinstance(grabbed, Image.Image) else None
 
     def paste_image(self):
         try:
-            from PIL import Image, ImageGrab
-            grabbed = ImageGrab.grabclipboard()
+            found = self._clipboard_picture()
         except Exception as exc:  # noqa: BLE001 - shown to the user
-            self._set_status(f"Couldn't read the clipboard: {exc}", "Error.TLabel")
+            self._note(f"Couldn't read the clipboard: {exc}", "Error.TLabel")
             return
-        if isinstance(grabbed, list):
-            path = next((Path(p) for p in grabbed if Path(p).suffix.lower() in IMAGE_TYPES | {".pdf"}), None)
-            if path is not None:
-                self.open_path(path)
-                return
-        if isinstance(grabbed, Image.Image):
-            self._close_pdf()
-            self._set_image(grabbed.convert("RGB"), "Screenshot from the clipboard.")
-            self.read_text()
-            return
-        self._set_status("The clipboard has no picture. Copy a screenshot of the problem, or paste its text "
-                         "into the box below.", "Warn.TLabel")
+        if isinstance(found, Path):
+            self.open_path(found)
+        elif found is not None:
+            self.submit(session.Source("Screenshot", found), found)
+        else:
+            self._note("The clipboard has no picture. Copy a screenshot of the problem, or type it below.",
+                       "Warn.TLabel")
 
+    def _entry_paste(self, _e):
+        """Ctrl+V in the text box: a picture on the clipboard is solved, text is pasted as usual."""
+        try:
+            found = self._clipboard_picture()
+        except Exception:  # noqa: BLE001 - no picture there: the default paste of text runs
+            return None
+        if found is None:
+            return None
+        self.open_path(found) if isinstance(found, Path) else self.submit(session.Source("Screenshot", found), found)
+        return "break"
+
+    def _ctrl_v(self, _e):
+        if self.app.current != "notebook":
+            return
+        try:
+            focus = self.focus_get()
+        except (KeyError, tk.TclError):   # focus inside a combobox drop-down
+            return
+        if isinstance(focus, (tk.Entry, ttk.Entry, tk.Text)):
+            return           # the text box handles its own paste (see _entry_paste)
+        self.paste_image()
+
+    def send_text(self):
+        text = self.entry.value().strip()
+        if not text:
+            return
+        if self.submit(session.Source("Typed", text=text)):
+            self.entry.set_value("")
+
+    # ---------------------------------------------------------------------------------------------- PDFs --
     def _close_pdf(self):
         if self.pdf is not None:
             try:
                 self.pdf.close()
-            except Exception:  # noqa: BLE001 - closing a document we no longer need
-                pass
-        self.pdf, self.view = None, None
-        self.page_bar.pack_forget()
+            except Exception as exc:  # noqa: BLE001 - closing a document we no longer need
+                log_error("Notebook: couldn't close the PDF", exc)
+        self.pdf, self.view, self.image, self.crop = None, None, None, None
+        self.picker.pack_forget()
 
     def show_pdf_page(self, index):
         if self.pdf is None or not 0 <= index < self.pdf.n_pages:
             return
         self.pdf_index = index
-        self.page_label.configure(text=f"Page {index + 1} of {self.pdf.n_pages}")
-        self.page_bar.pack(side="left", padx=(self.app.theme.px(10), 0))
+        self.page_label.configure(text=f"{self.pdf.name} · page {index + 1} of {self.pdf.n_pages}")
         doc = self.pdf
-        self._run("render", lambda: doc.render(index, dpi=nb_ocr.PDF_DPI), self._pdf_drawn)
+        self._run("render", lambda: doc.render(index, dpi=reader.PDF_DPI), self._pdf_drawn)
 
     def _pdf_drawn(self, result, error):
         if error is not None:
-            self._set_status(f"Couldn't draw the page: {error}", "Error.TLabel")
+            self._note(f"Couldn't draw the page: {error}", "Error.TLabel")
             return
-        image, self.view = result
-        self._set_image(image, f"{self.pdf.name}, page {self.pdf_index + 1}. Drag around one problem to read "
-                               "only that one, then Read text.")
-
-    def _set_image(self, image, message):
-        self.image = image
+        self.image, self.view = result
         self.crop = None
+        self.solve_btn.configure(text="Solve this page")
         self._draw_image()
-        self._set_status(message)
+
+    def solve_pdf(self):
+        if self.pdf is None or self.image is None:
+            return
+        doc, index, crop, view = self.pdf, self.pdf_index, self.crop, self.view
+        thumb = self.image.crop(tuple(int(v) for v in crop)) if crop else self.image
+        name = f"{doc.name}, page {index + 1}" + (" (marked part)" if crop else "")
+        load = lambda: (reader.page_image(doc, index, crop, view), reader.text_layer(doc, index, crop, view))  # noqa: E731
+        self.submit(session.Source(name, load=load), thumb)
 
     def _draw_image(self):
         c = self.canvas
         c.delete("all")
-        w, h = max(c.winfo_width(), 50), max(c.winfo_height(), 50)
         if self.image is None:
-            c.create_text(w / 2, h / 2, text="Open or paste a picture of the problem,\nor just type it below.",
-                          fill=C["faint"], font=self.app.theme.f["base"], justify="center")
             return
         from PIL import ImageTk
+        w, h = max(c.winfo_width(), 50), max(c.winfo_height(), 50)
         iw, ih = self.image.size
         k = min(w / iw, h / ih, 2.0)
         self._shown_scale = k
@@ -508,238 +908,135 @@ class NotebookPage(ttk.Frame):
         if self.crop and (self.crop[2] - self.crop[0] < 8 or self.crop[3] - self.crop[1] < 8):
             self._clear_crop()
         elif self.crop:
-            self._set_status("Marked part: Read text reads only that part. Double-click the picture to clear it.")
+            self.solve_btn.configure(text="Solve the marked part")
 
     def _clear_crop(self):
         self.crop = None
         self.canvas.delete("crop")
+        self.solve_btn.configure(text="Solve this page")
 
-    def read_text(self):
-        if self.image is None:
-            self._set_status("Open or paste a picture first, or type the problem into the box.", "Warn.TLabel")
+    # --------------------------------------------------------------------------------------------- turns --
+    def submit(self, source, picture=None) -> bool:
+        """Start a turn: a bubble on the left, its answer streamed on the right. False while one is running."""
+        if self._turn is not None:
+            self._note("Wait for this answer, or press Stop.", "Warn.TLabel")
+            return False
+        self._note("")
+        self._turns += 1
+        self._bubble(self._turns, source.name, picture, source.text)
+        self.answers.add_turn(self._turns)
+        self.set_status("Working…")
+        self._busy(True)
+        self._turn = session.Turn(source, self.index, self._url(), self.model_var.get(), history_path())
+        self._run("turn", self._turn.run, self._turn_done, on_event=self._turn_event)
+        return True
+
+    def _turn_event(self, event):
+        kind, value = event
+        if kind == "status":
+            self.set_status(value)
+        elif kind == "start":
+            self.answers.begin()
+        elif kind == "text":
+            self.answers.feed(value)
+        elif kind == "end":
+            self.answers.end(value)
+
+    def _turn_done(self, _answers, error):
+        self._turn = None
+        self._busy(False)
+        self.set_status("")
+        if error is None:
             return
-        self._set_status("Reading the text…")
-        crop, image, doc, index, view = self.crop, self.image, self.pdf, self.pdf_index, self.view
-        if doc is not None:
-            work = lambda: nb_ocr.read_pdf_page(doc, index, crop, view)  # noqa: E731
+        if isinstance(error, ollama.Cancelled):
+            self.answers.finish()
+            self.answers.note("Stopped.")
+        elif isinstance(error, ollama.NotReady):
+            self.answers.setup(str(error))
+            self.check_models(quiet=True)
+        elif isinstance(error, ollama.OllamaError):
+            log_error("Notebook: the reading model failed", error)
+            self.answers.note(str(error), "error")
         else:
-            work = lambda: nb_ocr.read_image(image, crop)  # noqa: E731
-        self._run("ocr", work, self._text_read)
+            log_error("Notebook: a turn failed", error)
+            self.answers.note(f"Something went wrong: {type(error).__name__}: {error}", "error")
 
-    def _text_read(self, reading, error):
-        if error is not None:
-            kind = "Warn.TLabel" if isinstance(error, nb_ocr.OcrUnavailable) else "Error.TLabel"
-            self._set_status(str(error) or type(error).__name__, kind)
-            return
-        self.text.delete("1.0", "end")
-        self.text.insert("1.0", reading.text)
-        self._highlight()
-        self._set_status(" ".join(reading.notes) or "Read.", "Panel.Muted.TLabel")
-        if reading.text.strip():
-            self.find()
+    def stop(self):
+        if self._turn is not None:
+            self._turn.cancel()
+            self.set_status("Stopping…")
 
-    def clear(self):
-        self._close_pdf()
-        self.image = None
-        self.crop = None
-        self._draw_image()
-        self.text.delete("1.0", "end")
-        self._set_status("")
-        self.result = None
-        self._fill_list([])
-        self._set_detail(None)
+    def new_chat(self):
+        self.stop()
+        self._token["turn"] = self._token.get("turn", 0) + 1     # results of a stopped turn are ignored
+        self._turn = None
+        self._busy(False)
+        for child in self.turns.body.winfo_children():
+            if child is not self.empty:
+                child.destroy()
+        self._thumbs = []
+        self.empty.pack(fill="x", pady=(self.app.theme.px(60), 0))
+        self.answers.clear()
+        self._note("")
+        self.set_status("")
 
-    # ------------------------------------------------------------------------------------- highlighting --
-    def _highlight_later(self):
-        if getattr(self, "_hl_job", None):
-            self.after_cancel(self._hl_job)
-        self._hl_job = self.after(150, self._highlight)
-
-    def _highlight(self):
-        self._hl_job = None
-        self.text.tag_remove("num", "1.0", "end")
-        for start, end in nb_lookup.number_spans(self.text.get("1.0", "end-1c")):
-            self.text.tag_add("num", f"1.0+{start}c", f"1.0+{end}c")
-
-    # --------------------------------------------------------------------------------------------- lookup --
-    def problem_text(self) -> str:
-        return self.text.get("1.0", "end-1c").strip()
-
-    def find(self):
-        text = self.problem_text()
-        if self.index is None:
-            self._set_banner("The library is still loading, or none is set (Library ▾).", "Warn.TLabel")
-            return
-        result = self.result = self.index.lookup(text)
-        self.list_mode.set("matches")
-        self._fill_list([c.exercise for c in result.candidates], scores=[c.score for c in result.candidates])
-        if result.status == "empty":
-            self._set_banner(result.note, "Warn.TLabel")
-            self._set_detail(None)
-            return
-        if result.status == "match":
-            best = result.best
-            self._set_banner(f"Found: Exercise {best.exercise.number} (score {best.score:.2f}). "
-                             "Not this one? Pick another below." + (f" {result.note}" if result.note else ""),
-                             "Ok.TLabel")
-            self._select(best.exercise)
-        elif result.status == "choose":
-            self._set_banner(f"{result.note} Click one to see it.", "Warn.TLabel")
-            self._set_detail(None)
+    def _busy(self, busy):
+        for b in (self.send_btn, self.open_btn, self.paste_btn, self.solve_btn):
+            b.state(["disabled"] if busy else ["!disabled"])
+        if busy:
+            self.stop_btn.pack(side="right", padx=(self.app.theme.px(8), 0))
         else:
-            self._set_banner(f"Not in your library (best score {result.best.score:.2f}, below "
-                             f"{nb_lookup.LOW:.2f}). The closest ones are below. Live solving comes in a later "
-                             "version.", "Warn.TLabel")
-            self._set_detail(None)
-        self._remember(text, result)
+            self.stop_btn.pack_forget()
 
-    def _remember(self, text, result):
-        history = [h for h in self.app.cfg.get("notebook_history", []) if isinstance(h, dict)]
-        best = result.best.exercise.key if result.status == "match" and result.best else None
-        history.insert(0, {"time": time.strftime("%Y-%m-%d %H:%M"), "text": text[:400], "status": result.status,
-                           "exercise": best})
-        self.app.cfg["notebook_history"] = history[:HISTORY_LIMIT]
-        settings.save(self.app.cfg)
+    def _bubble(self, n, name, picture, text):
+        t, px = self.app.theme, self.app.theme.px
+        self.empty.pack_forget()
+        bubble = ttk.Frame(self.turns.body, style="Soft.TFrame", padding=(px(12), px(10)))
+        bubble.pack(anchor="e", padx=(px(36), px(4)), pady=(px(4), px(6)))
+        parts = []
+        if picture is not None:
+            from PIL import ImageTk
+            shown = picture.copy()
+            shown.thumbnail((px(THUMB), px(THUMB)))
+            photo = ImageTk.PhotoImage(shown, master=self)
+            self._thumbs.append(photo)
+            parts.append(tk.Label(bubble, image=photo, background=C["accent_soft"], borderwidth=0))
+        if text:
+            parts.append(tk.Label(bubble, text=text, wraplength=px(320), justify="left", background=C["accent_soft"],
+                                  foreground=C["text"], font=t.f["base"]))
+        parts.append(tk.Label(bubble, text=f"{name} · {time.strftime('%H:%M')}", background=C["accent_soft"],
+                              foreground=C["muted"], font=t.f["small"]))
+        for i, part in enumerate(parts):
+            part.pack(anchor="e" if part is parts[-1] else "w", pady=(px(6) if i else 0, 0))
+        for w in [bubble] + parts:
+            w.bind("<Button-1>", lambda e, n=n: self.answers.show_turn(n))
+        self.after_idle(lambda: self.turns.canvas.yview_moveto(1.0))
 
-    # ------------------------------------------------------------------------------------------- the list --
-    def _mode_changed(self):
-        mode = self.list_mode.get()
-        if mode == "matches":
-            cands = self.result.candidates if self.result else []
-            self._fill_list([c.exercise for c in cands], scores=[c.score for c in cands])
-        elif mode == "search":
-            self._run_search()
-        else:
-            self._fill_history()
+    # ------------------------------------------------------------------------------------------- output --
+    def open_in_browser(self, md):
+        dark = self.app.theme.dark
 
-    def _search_later(self):
-        if getattr(self, "_search_job", None):
-            self.after_cancel(self._search_job)
-        self._search_job = self.after(200, self._run_search)
+        def write():
+            folder = notebook_dir() / "answers"
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / "answer.html"
+            path.write_text(render.answer_page(md, dark), encoding="utf-8")
+            return path
 
-    def _run_search(self):
-        self._search_job = None
-        if self.index is None:
-            return
-        self.list_mode.set("search")
-        self._fill_list(self.index.search(self.search.value()))
-
-    def _fill_history(self):
-        self.tree.delete(*self.tree.get_children())
-        self.listed = []
-        self._history = [h for h in self.app.cfg.get("notebook_history", []) if isinstance(h, dict)]
-        for i, h in enumerate(self._history):
-            number = (h.get("exercise") or "").split(":")[-1] or {"choose": "picked?", "none": "not found"}.get(
-                h.get("status"), "")
-            self.tree.insert("", "end", iid=f"h{i}", values=(number, h.get("time", "")[5:],
-                                                            " ".join(h.get("text", "").split())[:120]))
-
-    def _fill_list(self, exercises, scores=None):
-        self.tree.delete(*self.tree.get_children())
-        self.listed = list(exercises)
-        self.tree.heading("score", text="Score" if scores else "Chapter")
-        for i, e in enumerate(exercises):
-            second = f"{scores[i]:.2f}" if scores else str(e.chapter)
-            self.tree.insert("", "end", iid=str(i), values=(e.number, second, " ".join(plain_problem(e).split())[:140]))
-
-    def _picked(self, _e=None):
-        sel = self.tree.selection()
-        if not sel:
-            return
-        iid = sel[0]
-        if iid.startswith("h"):
-            h = self._history[int(iid[1:])]
-            self.text.delete("1.0", "end")
-            self.text.insert("1.0", h.get("text", ""))
-            self._highlight()
-            ex = None
-            if h.get("exercise") and self.library is not None:
-                book, _, number = h["exercise"].partition(":")
-                ex = self.library.get(number, book)
-            self._set_detail(ex)
-            return
-        self._set_detail(self.listed[int(iid)])
-
-    def _select(self, exercise):
-        if exercise in self.listed:
-            iid = str(self.listed.index(exercise))
-            self.tree.selection_set(iid)
-            self.tree.see(iid)
-        self._set_detail(exercise)
-
-    # ---------------------------------------------------------------------------------------- the detail --
-    def _set_detail(self, e):
-        self.current = e
-        for b in (self.solution_btn, self.prev_btn, self.next_btn):
-            b.state(["!disabled"] if e is not None else ["disabled"])
-        self.wrong_btn.state(["!disabled"] if self.result is not None else ["disabled"])
-        self.preview.configure(state="normal")
-        self.preview.delete("1.0", "end")
-        if e is None:
-            self.title.configure(text="No exercise selected")
-            self.meta.configure(text="A match from your library appears here.")
-            self.badge.configure(text="")
-        else:
-            self.title.configure(text=f"Exercise {e.number}" + (f" · {e.title}" if e.title else ""))
-            self.meta.configure(text=f"{e.book.title()} {e.edition} · Chapter {e.chapter} · {e.topic}"
-                                     f"\n{Path(e.source_file).name}, line {e.line}")
-            badge = provenance.for_exercise(e)
-            style = {"verified": "Ok.TLabel", "caution": "Warn.TLabel"}.get(badge.kind, "Panel.Muted.TLabel")
-            detail = f": {badge.detail}" if badge.detail else ""
-            tables = f"\n📘 Uses {len(e.table_refs)} table lookup{'s' if len(e.table_refs) > 1 else ''}." \
-                if e.table_refs else ""
-            self.badge.configure(text=f"{badge.label}{detail}{tables}", style=style)
-            self.preview.insert("1.0", plain_problem(e))
-        self.preview.configure(state="disabled")
-
-    def _step(self, step):
-        if self.current is None or self.library is None:
-            return
-        other = self.library.neighbour(self.current, step)
-        if other is not None:
-            self._select(other)
-
-    def open_solution(self):
-        e, lib = self.current, self.library
-        if e is None or lib is None:
-            return
-        pages = render.Pages(lib, notebook_dir() / "pages", dark=self.app.theme.dark)
-        self._run("open", lambda: pages.opener(e), self._opened)
+        self._run("open", write, self._opened)
 
     def _opened(self, path, error):
         if error is not None:
-            kind = render.RenderUnavailable
-            messagebox.showerror(APP_NAME, str(error) if isinstance(error, kind) else
-                                 f"Couldn't write the solution page:\n{type(error).__name__}: {error}", parent=self)
+            if not isinstance(error, render.RenderUnavailable):
+                log_error("Notebook: couldn't write the answer page", error)
+            messagebox.showerror(APP_NAME, str(error) if isinstance(error, render.RenderUnavailable) else
+                                 f"Couldn't write the answer page:\n{type(error).__name__}: {error}", parent=self)
             return
         if not webbrowser.open(path.as_uri()):
             messagebox.showinfo(APP_NAME, f"No browser opened. Open this file yourself:\n{path}", parent=self)
 
-    def wrong_match(self):
-        if self.result is None:
-            return
-        answer = simpledialog.askstring(
-            APP_NAME, "Which exercise is it really? Type its number (for example 3.13).\n"
-                      "Leave it empty if it isn't in your library.", parent=self)
-        if answer is None:
-            return
-        number = answer.strip().lower().removeprefix("exercise").strip()
-        target = self.library.get(number) if number and self.library is not None else None
-        if number and target is None:
-            messagebox.showwarning(APP_NAME, f"Exercise {number} isn't in your library.", parent=self)
-            return
-        try:
-            log_feedback(self.problem_text(), self.current, target.key if target else "", self.result.candidates)
-        except OSError as exc:
-            messagebox.showerror(APP_NAME, f"Couldn't save the note:\n{exc}", parent=self)
-            return
-        self._set_banner(f"Saved to {feedback_path().name}. Thanks: it is used to tune the matching.", "Ok.TLabel")
-        if target is not None:
-            self._select(target)
+    def set_status(self, text):
+        self.status.configure(text=text)
 
-    # -------------------------------------------------------------------------------------------- messages --
-    def _set_status(self, text, style="Panel.Muted.TLabel"):
-        self.status.configure(text=text, style=style)
-
-    def _set_banner(self, text, style="Panel.Muted.TLabel"):
-        self.banner.configure(text=text, style=style)
+    def _note(self, text, style="Panel.Muted.TLabel"):
+        self.note_label.configure(text=text, style=style)
