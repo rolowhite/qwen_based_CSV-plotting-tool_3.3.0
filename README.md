@@ -545,8 +545,8 @@ The model menu in the header lists the installed models that can read pictures (
 capabilities include `vision`). The Ollama address is `notebook_ollama_url` in the settings file (default
 `http://localhost:11434`). Typed problems work without Ollama.
 
-**Answers in this version come from the worked solutions that come with the app:** Walpole, *Probability &
-Statistics for Engineers & Scientists*, 9th edition, chapters 1–18, 1,207 exercises. They are in
+**Known problems come from the worked solutions that come with the app:** Walpole, *Probability & Statistics for
+Engineers & Scientists*, 9th edition, chapters 1–18, 1,207 exercises. They are in
 `plotstudio/assets/notebook/Walpole_All_Chapters_Solutions.md` and load by themselves, so there is nothing to set
 up. The file is only read, never changed. It has front matter (`book:`, `edition:`), `### Exercise N.M` headings,
 `**Problem:**` blocks and `✔ *Checker: …*` lines.
@@ -559,10 +559,41 @@ and in one of two ways:
   and any other number read is one its solution uses. A book page often says more than the solution file's
   shorter problem text, such as $R^2$ and $s^2$ in parts the file leaves out.
 
-When a first reading doesn't match, the picture is read once more at another size. Any other problem gets *"I can't
-solve this one yet"*. Solving new problems with a local model and an exact calculator is the next version. Every
-turn (what was read and where the answer came from) is logged in
-`~/.csv_plot_studio/notebook/notebook_history.jsonl`.
+When a problem has fewer than two telling numbers (only "Exercise 1.1", 0, 1 or 2), it also needs the printed
+exercise number or nearly the same words, so another question about the same exercise is never given its answer.
+When a first reading doesn't match, the picture is read once more at another size.
+
+**Any other problem is solved live.** The model on your computer (the same `qwen3-vl:8b-instruct`) works it out step
+by step:
+* **Every number comes from the app's own exact calculator**, never from the model. The calculator handles
+  fractions exactly, and gives normal, t, χ², F, binomial, Poisson and other distribution values from scipy instead
+  of printed tables. It never runs the model's text.
+* **The answer is checked.** If the **Answer:** line has a number the calculator never gave, or leaves out a part
+  of the question, the model is asked once to fix it.
+* **Context:** a problem that mentions another exercise ("the joint density of Exercise 3.40") gets that exercise's
+  text from the solutions.
+* **Time limit:** a solve takes about a minute; after 3 minutes the local model is stopped.
+
+**Optional: a free Gemini key for better solutions.** Use the model menu at the top, then **Gemini: add a free key…**
+(get a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)). Gemini then solves each new problem
+alongside the local model, with the same calculator.
+* **What's shown:** Gemini's solution. When the two final answers differ, Gemini first re-checks its work once
+  with the other answer in view.
+* **When Gemini can't help:** if it has no internet or today's free quota is used up, the local model's solution is
+  shown, and the model menu says why.
+* **Privacy:** the problem's text and picture are sent to Google. On the free tier, Google may use them to improve
+  its products and people may read them, so don't send anything private.
+* **Who may use it:** you must be 18 or older. The free tier isn't for users in the EU, the UK or Switzerland.
+* **Where the key lives:** only in your settings file, `~/.csv_plot_studio.json`, unencrypted.
+* **Without a key** everything works offline.
+
+Every turn is logged in `~/.csv_plot_studio/notebook/notebook_history.jsonl`: what was read, both solutions with
+their calculator calls, whether they agreed, and which was shown. The key is never logged.
+
+Measured with `python scripts/eval_notebook.py --live --n 20 --no-gemini` (the library match off, scored against
+the stored solutions' results): the local model alone solved 16 of 20 (80%; one of them is an answer in words,
+checked by hand), with a median of 48 s per problem. The misses were a 4-variable regression and a long t-test
+(stopped by the time limit), a misunderstood question, and one normal approximation done another way.
 
 Formulas are drawn with matplotlib's mathtext, after a small rewrite for what mathtext lacks: `\le`, `\tfrac`,
 `\frac12`, `\boxed` and the like. `cases` and matrices are laid out cell by cell. A formula it still can't draw is
