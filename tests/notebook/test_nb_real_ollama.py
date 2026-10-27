@@ -14,7 +14,7 @@ def model():
         found = ollama.models()
     except ollama.OllamaError as exc:
         pytest.skip(str(exc))
-    name = ollama.pick(found, "vision")
+    name = ollama.pick(found, "vision", avoid="thinking")
     if name is None:
         pytest.skip("no Ollama model with the vision capability")
     return name, dict(found)[name]

@@ -85,10 +85,15 @@ def models(url: str = DEFAULT_URL) -> List[Tuple[str, Tuple[str, ...]]]:
     return out
 
 
-def pick(found: Sequence[Tuple[str, Sequence[str]]], need: str, wanted: str = "") -> Optional[str]:
-    """The `wanted` model if it is installed and can do `need`, otherwise the first one that can."""
+def pick(found: Sequence[Tuple[str, Sequence[str]]], need: str, wanted: str = "", avoid: str = "") -> Optional[str]:
+    """The `wanted` model if it is installed and can do `need`, otherwise the first one that can (preferring
+    one without the `avoid` capability: a thinking model reasons at length even when asked only to copy)."""
     able = [name for name, caps in found if need in caps]
-    return wanted if wanted in able else (able[0] if able else None)
+    if wanted in able:
+        return wanted
+    if avoid:
+        able.sort(key=lambda name: avoid in dict(found)[name])      # stable: Ollama's order otherwise
+    return able[0] if able else None
 
 
 def sent_size(long_side: int) -> int:
@@ -170,6 +175,8 @@ class Chat:
                         raise OllamaError("Ollama sent a reply in an unexpected shape.")
                     if chunk.get("error"):
                         raise OllamaError(f"Ollama: {chunk['error']}")
+                    if chunk.get("done") and chunk.get("done_reason") == "length":
+                        raise OllamaError(f"{model} stopped at its length limit before finishing its reply.")
                     yield chunk
                     if chunk.get("done"):
                         return

@@ -26,7 +26,7 @@ def test_one_call_returns_every_problem_in_order():
     assert [p.label for p in reading.problems] == ["3.13", "3.14"]
     assert reading.problems[0].markdown.startswith("The distribution")
     assert reading.unreadable == [] and len(fake.requests) == 1
-    assert sent["format"] == reader.SCHEMA and sent["think"] is False
+    assert sent["format"] == reader.SCHEMA and sent["think"] is False and sent["options"] == reader.OPTIONS
     assert sent["messages"][0]["images"] and "Do not solve" in sent["messages"][0]["content"]
 
 
@@ -46,6 +46,17 @@ def test_the_text_layer_hint_and_the_size_are_sent():
 def test_a_reply_in_the_wrong_shape_is_a_clear_error(raw, words):
     with pytest.raises(ollama.OllamaError, match=words):
         reader.parse(raw)
+
+
+def test_a_table_without_its_rule_line_gets_one():
+    read = "has the distribution below.\n\n| $x$ | 0 | 1 | 2 |\n| $f(x)$ | 0.5 | 0.3 | 0.2 |\n\nFind the CDF."
+    fixed = reader.table_rules(read)
+    assert fixed.split("\n")[3] == "|---|---|---|---|"
+    assert reader.table_rules(fixed) == fixed                      # a table that has it is left alone
+    assert reader.table_rules("no table here") == "no table here"
+    from plotstudio.core.notebook import render
+    assert "<table>" in render.markdown_html(fixed)
+    assert reader.parse(_reply(("", read))).problems[0].markdown == fixed
 
 
 def test_fenced_json_empty_problems_and_unreadable_notes():

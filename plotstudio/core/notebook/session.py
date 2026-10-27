@@ -104,7 +104,7 @@ class Turn:
 
     def _pick_model(self):
         found = ollama.models(self.url)
-        name = ollama.pick(found, "vision", self.wanted)
+        name = ollama.pick(found, "vision", self.wanted, avoid="thinking")
         if name is None:
             raise ollama.NotReady("None of the models installed in Ollama can read pictures. Run: "
                                   + ollama.PULL_HINT)

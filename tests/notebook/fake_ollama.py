@@ -69,7 +69,7 @@ class FakeOllama:
                                                      "done": False}).encode() + b"\n")
                         self.wfile.flush()
                     self.wfile.write(json.dumps({"message": {"role": "assistant", "content": ""}, "done": True,
-                                                 "done_reason": "stop"}).encode() + b"\n")
+                                                 "done_reason": reply.get("done_reason", "stop")}).encode() + b"\n")
                 except OSError:
                     pass        # the client hung up (Stop)
 

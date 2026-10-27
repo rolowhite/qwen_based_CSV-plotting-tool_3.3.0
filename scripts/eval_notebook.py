@@ -122,7 +122,7 @@ def main(argv=None):
     pool = [e for e in lib.exercises if e.has_problem and e.checker_note]
     sample = random.Random(args.seed).sample(pool, min(args.n, len(pool)))
     found = ollama.models(args.url)
-    model = ollama.pick(found, "vision", args.model)
+    model = ollama.pick(found, "vision", args.model, avoid="thinking")
     if model is None:
         raise SystemExit(f"No vision model in Ollama. Run: {ollama.PULL_HINT}")
     caps = dict(found)[model]

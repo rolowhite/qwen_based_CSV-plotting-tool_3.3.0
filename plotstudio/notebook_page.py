@@ -699,9 +699,9 @@ class NotebookPage(ttk.Frame):
         else:
             self._models = found
             if not quiet:
-                vision = [n for n, caps in found if "vision" in caps]
-                self.set_status(f"Ready: {ollama.pick(found, 'vision', self.model_var.get())}" if vision else "")
-                if not vision:
+                chosen = ollama.pick(found, "vision", self.model_var.get(), avoid="thinking")
+                self.set_status(f"Ready: {chosen}" if chosen else "")
+                if chosen is None:
                     self.answers.setup("Ollama is running, but none of its models can read pictures.")
         self._fill_model_menu()
 
@@ -710,7 +710,7 @@ class NotebookPage(ttk.Frame):
         menu.delete(0, "end")
         found = self._models or []
         vision = [n for n, caps in found if "vision" in caps]
-        chosen = ollama.pick(found, "vision", self.model_var.get())
+        chosen = ollama.pick(found, "vision", self.model_var.get(), avoid="thinking")
         if chosen:
             self.model_var.set(chosen)
         for name in vision:

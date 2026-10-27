@@ -19,6 +19,15 @@ def test_models_and_pick_by_capability():
     assert ollama.pick(found, "vision", wanted="qwen2.5vl:7b") == "qwen2.5vl:7b"
     assert ollama.pick(found, "vision", wanted="llama3:8b") == "qwen3-vl:8b"      # can't see: not used
     assert ollama.pick(found, "audio") is None
+    assert ollama.pick(found, "vision", avoid="thinking") == "qwen2.5vl:7b"     # copying needs no reasoning
+    assert ollama.pick(found, "vision", wanted="qwen3-vl:8b", avoid="thinking") == "qwen3-vl:8b"
+    assert ollama.pick([("t", ["vision", "thinking"])], "vision", avoid="thinking") == "t"   # the only one
+
+
+def test_a_reply_cut_at_the_length_limit_is_a_clear_error():
+    with FakeOllama(MODELS, replies=[{"text": '{"problems": [', "done_reason": "length"}]) as fake:
+        with pytest.raises(ollama.OllamaError, match="length limit"):
+            ollama.Chat(fake.url).text("qwen3-vl:8b", [])
 
 
 def test_chat_streams_the_reply_and_sends_the_options():
