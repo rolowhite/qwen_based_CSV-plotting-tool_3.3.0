@@ -25,7 +25,6 @@ DEFAULTS = {
     "recent_events": [],
     "datasets_seen": {},
     "graph_names": {},
-    "notebook_library": [],         # folders or .md files with worked solutions (only read)
     "notebook_ollama_url": "http://localhost:11434",   # the local Ollama that reads pictures
     "notebook_reader_model": "",    # the Ollama model that reads pictures ("" = the first that can)
 }

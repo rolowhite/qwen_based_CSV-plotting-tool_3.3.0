@@ -32,6 +32,7 @@ IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"
 GUTTER = 12
 THUMB = 240             # px: the long side of the picture in a bubble
 STREAM = object()       # marks a streamed event in the job queue (the job isn't finished yet)
+LIBRARY_FILES = (nb_library.BUILT_IN,)    # the solutions every answer comes from (for now); tests swap in their own
 
 
 def notebook_dir() -> Path:
@@ -114,12 +115,6 @@ class AnswerView(tk.Frame):
     def setup(self, message):
         self._live = None
         self._add(("setup", message))
-
-    def library_needed(self):
-        self._live = None
-        if not self.items or self.items[-1] != ("library",):
-            self._add(("library",))
-        self.text.see("end")
 
     def note(self, text, tag="muted"):
         self._live = None
@@ -213,8 +208,6 @@ class AnswerView(tk.Frame):
                 self._actions(item[1])
         elif kind == "setup":
             self._setup_card(item[1])
-        elif kind == "library":
-            self._library_card()
         else:
             self._insert(item[1] + "\n", (item[2], "p"))
 
@@ -414,23 +407,6 @@ class AnswerView(tk.Frame):
         self.text.window_create("end-1c", window=card)
         self._insert("\n", ("p",))
 
-    def _library_card(self):
-        px = self.px
-        card = ttk.Frame(self.text, style="Well.TFrame", padding=(px(16), px(12)))
-        ttk.Label(card, text="Add your solutions first", style="Raised.Bold.TLabel").pack(anchor="w")
-        ttk.Label(card, text="No solutions are loaded, so there is nothing to answer from yet. Pick your solutions "
-                             "file (for example Walpole_All_Chapters_Solutions.md) or a folder of .md files; they are "
-                             "only read, never changed. Then paste the problem again.", style="Raised.Muted.TLabel",
-                  wraplength=px(440), justify="left").pack(anchor="w", pady=(px(4), px(10)))
-        row = ttk.Frame(card, style="Well.TFrame")
-        row.pack(anchor="w")
-        ttk.Button(row, text="Add a solutions file…", style="Accent.TButton", command=self.page.add_file).pack(
-            side="left")
-        ttk.Button(row, text="Add a folder…", command=self.page.add_folder).pack(side="left", padx=(px(6), 0))
-        self._windows.append(card)
-        self.text.window_create("end-1c", window=card)
-        self._insert("\n", ("p",))
-
 
 def _block_end(md: str, start: int) -> int:
     """Where the finished Markdown blocks end: after the last blank line past `start` that is not inside $$."""
@@ -478,18 +454,7 @@ class NotebookPage(ttk.Frame):
         ttk.Label(inner, text="Notebook", style="Panel.H3.TLabel").pack(side="left", padx=(px(14), 0))
         ttk.Label(inner, text="Solve a statistics problem from a photo, a PDF or text",
                   style="Panel.Muted.TLabel").pack(side="left", padx=(px(10), 0))
-        theme_button(inner, app).pack(side="right")
-        self.lib_button = ttk.Menubutton(inner, text="Library: none", style="Ghost.TMenubutton")
-        self.lib_button.pack(side="right", padx=(0, px(8)))
-        menu = t.menu(self.lib_button)
-        menu.add_command(label="Add a solutions folder…", command=self.add_folder)
-        menu.add_command(label="Add a solutions file…", command=self.add_file)
-        menu.add_command(label="Reload", command=self.reload_library)
-        menu.add_command(label="Show load notes", command=self.show_load_notes)
-        menu.add_separator()
-        menu.add_command(label="Forget the library list", command=self.forget_library)
-        self.lib_button["menu"] = menu
-        Tooltip(self.lib_button, "The folders or .md files with your worked solutions (only read, never changed)")
+        theme_button(inner, app).pack(side="right", padx=(px(4), 0))
         self.model_var = tk.StringVar(value=app.cfg.get("notebook_reader_model") or "")
         self.model_button = ttk.Menubutton(inner, text="Model", style="Ghost.TMenubutton")
         self.model_button.pack(side="right", padx=(0, px(4)))
@@ -652,59 +617,23 @@ class NotebookPage(ttk.Frame):
             self.progress.pack_forget()
 
     # ------------------------------------------------------------------------------------------ library --
-    def _folders(self):
-        return [p for p in self.app.cfg.get("notebook_library", []) if isinstance(p, str)]
-
-    def add_folder(self):
-        path = filedialog.askdirectory(parent=self, title="Folder with your solution files (.md)")
-        if path:
-            self._add_source(path)
-
-    def add_file(self):
-        path = filedialog.askopenfilename(parent=self, title="A solutions file", filetypes=[("Markdown", "*.md")])
-        if path:
-            self._add_source(path)
-
-    def _add_source(self, path):
-        folders = self._folders()
-        if path not in folders:
-            folders.append(path)
-        self.app.cfg["notebook_library"] = folders
-        settings.save(self.app.cfg)
-        self.reload_library()
-
-    def forget_library(self):
-        self.app.cfg["notebook_library"] = []
-        settings.save(self.app.cfg)
-        self.reload_library()
-
     def reload_library(self):
-        folders = self._folders()
+        """Read the solutions that come with the app in a worker (parsed once, then cached by the file's hash)."""
+        files = list(LIBRARY_FILES)
         self._loading = True
-        self.lib_button.configure(text="Library: loading…")
         cache = notebook_dir() / "index.json"
-        self._run("library", lambda: nb_library.load(folders, cache_path=cache), self._library_loaded)
+        self._run("library", lambda: nb_library.load(files, cache_path=cache), self._library_loaded)
 
     def _library_loaded(self, lib, error):
         self._loading = False
+        if error is None and not lib.exercises:
+            error = FileNotFoundError("; ".join(str(p) for p in lib.problems) or "no exercises found")
         if error is not None:
-            self.lib_button.configure(text="Library: error")
-            log_error("Notebook: couldn't read the solutions library", error)
-            messagebox.showerror(APP_NAME, f"Couldn't read the solutions library:\n{error}", parent=self)
+            log_error("Notebook: couldn't read the built-in solutions", error)
+            self.answers.note(f"The built-in solutions couldn't be read ({error}). Reinstall the app to restore "
+                              f"{nb_library.BUILT_IN.name}.", "error")
             return
         self.library, self.index = lib, nb_lookup.Index(lib)
-        books = sorted({(e.book, e.edition) for e in lib.exercises})
-        name = ", ".join(f"{b.title()} {ed}".strip() for b, ed in books) or "empty"
-        notes = f" · {len(lib.problems)} notes" if lib.problems else ""
-        self.lib_button.configure(text=f"Library: {name} · {len(lib.exercises)} exercises{notes}")
-
-    def show_load_notes(self):
-        if self.library is None or not self.library.problems:
-            messagebox.showinfo(APP_NAME, "The library loaded without problems.", parent=self)
-            return
-        lines = [str(p) for p in self.library.problems[:40]]
-        more = len(self.library.problems) - len(lines)
-        messagebox.showinfo(APP_NAME, "\n".join(lines) + (f"\n… and {more} more" if more > 0 else ""), parent=self)
 
     # ------------------------------------------------------------------------------------------- models --
     def _url(self):
@@ -948,9 +877,8 @@ class NotebookPage(ttk.Frame):
         if self._loading:
             self._note("Your solutions are still loading. Try again in a moment.", "Warn.TLabel")
             return False
-        if self.library is None or not self.library.exercises:
-            # for now every answer comes from the solutions, so say so instead of "I can't solve this one yet"
-            self.answers.library_needed()
+        if self.library is None:
+            self._note("The built-in solutions couldn't be read (see the message on the right).", "Error.TLabel")
             return False
         self._note("")
         self._turns += 1

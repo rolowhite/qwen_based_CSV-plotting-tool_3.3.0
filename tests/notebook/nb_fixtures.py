@@ -1,7 +1,7 @@
-"""A small made-up solution library in the Walpole file layout (no book text), and where the real one is.
+"""A small made-up solution library in the Walpole file layout (no book text), and the real one.
 
-The real library is the user's own file and is never copied into the repo: tests that need it read
-$NOTEBOOK_LIBRARY and are skipped without it.
+The real library (the Walpole solutions) comes with the app: plotstudio/assets/notebook. $NOTEBOOK_LIBRARY
+points the tests at another file or folder instead.
 """
 import os
 from pathlib import Path
@@ -96,7 +96,8 @@ def write_sample(folder: Path) -> Path:
 
 
 def real_library() -> Path:
-    path = Path(os.environ.get("NOTEBOOK_LIBRARY", "")).expanduser()
-    if not os.environ.get("NOTEBOOK_LIBRARY") or not path.exists():
-        pytest.skip("set NOTEBOOK_LIBRARY to your Walpole solutions file (or folder) to run this test")
+    from plotstudio.core.notebook.library import BUILT_IN
+    path = Path(os.environ.get("NOTEBOOK_LIBRARY") or BUILT_IN).expanduser()
+    if not path.exists():
+        pytest.skip(f"the solutions library is missing: {path}")
     return path

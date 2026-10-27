@@ -528,15 +528,19 @@ The model menu in the header lists the installed models that can read pictures (
 capabilities include `vision`). The Ollama address is `notebook_ollama_url` in the settings file (default
 `http://localhost:11434`). Typed problems work without Ollama.
 
-**Answers in this version come from your own solution library.** Use **Library ▾ › Add a solutions folder…** (or a
-single `.md` file). It reads Markdown files with front matter (`book:`, `edition:`), `### Exercise N.M` headings,
-`**Problem:**` blocks and `✔ *Checker: …*` lines. The files are only read, never changed, and they stay on your
-computer.
+**Answers in this version come from the worked solutions that come with the app:** Walpole, *Probability &
+Statistics for Engineers & Scientists*, 9th edition, chapters 1–18, 1,207 exercises. They are in
+`plotstudio/assets/notebook/Walpole_All_Chapters_Solutions.md` and load by themselves, so there is nothing to set
+up. The file is only read, never changed. It has front matter (`book:`, `edition:`), `### Exercise N.M` headings,
+`**Problem:**` blocks and `✔ *Checker: …*` lines.
 
-A stored solution is used only when all three of these hold:
-* the problem clearly matches one exercise,
-* that exercise has its own `**Problem:**` text,
-* both have exactly the same numbers (a textbook variant with one number changed is not given the stored answer).
+A stored solution is used only when the problem clearly matches one exercise that has its own `**Problem:**` text,
+and in one of two ways:
+* both have exactly the same numbers, so a textbook variant with one number changed is not given the stored
+  answer;
+* or the picture prints that exercise's number (for example "12.62"), every number of the stored problem was read,
+  and any other number read is one its solution uses. A book page often says more than the solution file's
+  shorter problem text, such as $R^2$ and $s^2$ in parts the file leaves out.
 
 When a first reading doesn't match, the picture is read once more at another size. Any other problem gets *"I can't
 solve this one yet"*. Solving new problems with a local model and an exact calculator is the next version. Every

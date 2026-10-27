@@ -22,18 +22,19 @@ def _reply(*problems):
 
 
 @pytest.fixture
-def app(tmp_path, monkeypatch):
+def app(tmp_path, monkeypatch, request):
     try:
         tk.Tk().destroy()
     except tk.TclError as exc:
         pytest.skip(f"no display: {exc}")
     import plotstudio.settings as settings
+    from plotstudio import notebook_page
     from plotstudio.core.notebook import session
     monkeypatch.setattr(settings, "PATH", tmp_path / ".csv_plot_studio.json")
     monkeypatch.setattr(session, "PACE", 0.0)
-    lib = fx.write_sample(tmp_path / "lib")
-    settings.PATH.write_text(json.dumps({"notebook_library": [str(lib)],
-                                         "notebook_ollama_url": "http://127.0.0.1:9"}), encoding="utf-8")
+    if "built_in" not in request.keywords:      # the small made-up library, unless the test is about the real one
+        monkeypatch.setattr(notebook_page, "LIBRARY_FILES", (fx.write_sample(tmp_path / "lib"),))
+    settings.PATH.write_text(json.dumps({"notebook_ollama_url": "http://127.0.0.1:9"}), encoding="utf-8")
     from plotstudio.app import App
     window = App()
     errors = []
@@ -125,18 +126,27 @@ def test_no_ollama_shows_how_to_set_it_up_and_typing_still_works(app):
     assert not app.errors
 
 
-def test_no_solutions_loaded_says_so_instead_of_cant_solve(app):
-    nb = _ready(app, "http://127.0.0.1:9")
-    app.cfg["notebook_library"] = []
-    nb.reload_library()
-    _wait(app, lambda: not nb._loading)
-    assert nb.library.exercises == []
-    for _ in range(2):                                          # a second paste doesn't add a second card
-        assert nb.submit(nb_session().Source("Typed", text=MARBLES)) is False
-    assert nb._turn is None and nb.answers.items == [("library",)]
-    texts = [w.cget("text") for w in nb.answers._windows[-1].winfo_children() if isinstance(w, tk.ttk.Label)]
-    assert "Add your solutions first" in texts
-    assert nb_session().NOT_YET not in nb.answers.plain_text()
+@pytest.mark.built_in
+def test_the_walpole_solutions_come_with_the_app(app):
+    from plotstudio.core.notebook import library
+    nb = _ready(app, "http://127.0.0.1:9")                    # empty settings: nothing was ever chosen
+    assert len(nb.library.exercises) == 1207 and {e.book for e in nb.library.exercises} == {"walpole"}
+    problem = library.load([library.BUILT_IN]).get("3.14").problem_md.replace("**Problem:**", "").strip()
+    nb.submit(nb_session().Source("Typed", text=problem))
+    _wait(app, lambda: nb._turn is None)
+    assert "Solution." in nb.answers.plain_text() and "0.7981" in nb.answers.plain_text()
+    assert not hasattr(nb, "lib_button")                     # no library menu, no folder to pick
+    assert not app.errors
+
+
+def test_missing_built_in_solutions_are_said_plainly(app, tmp_path, monkeypatch):
+    from plotstudio import notebook_page
+    monkeypatch.setattr(notebook_page, "LIBRARY_FILES", (tmp_path / "gone.md",))
+    app.show("notebook")
+    nb = app.notebook
+    _wait(app, lambda: not nb._loading and nb.answers.items)
+    assert nb.library is None and "built-in solutions couldn't be read" in nb.answers.plain_text()
+    assert nb.submit(nb_session().Source("Typed", text=MARBLES)) is False and nb._turn is None
     assert not app.errors
 
 

@@ -1,6 +1,6 @@
-"""Measure the Notebook's reading and matching on your own solution library (the library is the answer key).
+"""Measure the Notebook's reading and matching on its solution library (the library is the answer key).
 
-    python scripts/eval_notebook.py --library C:/path/Walpole_All_Chapters_Solutions.md --n 60
+    python scripts/eval_notebook.py --n 60          (the app's built-in Walpole solutions; --library for others)
 
 For a sample of exercises that have a **Problem:** block and a ✔ checker line, each problem is drawn as a
 picture twice (a clean page drawn by the browser with KaTeX, and a tilted, blurred, JPEG "phone photo" of
@@ -110,7 +110,7 @@ def run_one(e, image, index, url, model) -> dict:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--library", default=os.environ.get("NOTEBOOK_LIBRARY", ""))
+    ap.add_argument("--library", default=os.environ.get("NOTEBOOK_LIBRARY") or str(library.BUILT_IN))
     ap.add_argument("--n", type=int, default=60)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--url", default=ollama.DEFAULT_URL)
