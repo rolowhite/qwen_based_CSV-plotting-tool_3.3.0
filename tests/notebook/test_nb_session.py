@@ -71,21 +71,91 @@ def test_a_first_read_that_breaks_is_followed_by_the_second(index):
             _run(session.Turn(session.Source("p.png", _picture()), index, fake.url, pace=0))
 
 
-def test_two_misses_give_the_neutral_sentence_and_what_couldnt_be_read(index):
-    other = ("", "A die is rolled 4 times. Find the chance of two sixes.")
-    replies = [_reply(other, unreadable=["the last line"]), _reply(other, unreadable=["the last line."])]
-    with FakeOllama(MODELS, replies=replies) as fake:
-        answers, _ = _run(session.Turn(session.Source("p.png", _picture()), index, fake.url, pace=0))
-    assert answers == ["**Problem.**\n\n" + other[1] + "\n\n" + session.NOT_YET +
-                       " Part of the picture couldn't be read: the last line."]
+COIN = "A fair coin is tossed 10 times. Find the probability of exactly 3 heads."
+QWEN_SOLVES = [{"text": "**Given:** $n=10$, $p=0.5$. Binomial:", "calls": ["comb(10, 3) / 2**10"]},
+               "So $P(X=3)=15/128$.\n\n**Answer:** $0.1171875$"]
+
+
+def test_a_problem_not_in_the_solutions_is_solved_and_says_what_couldnt_be_read(index, tmp_path):
+    # replaces the 3.4.0 test of "I can't solve this one yet": such problems are now solved
+    log = tmp_path / "history.jsonl"
+    replies = [_reply(("", COIN), unreadable=["the last line"]), _reply(("", COIN), unreadable=["the last line."])]
+    with FakeOllama(MODELS, replies=replies + QWEN_SOLVES) as fake:
+        answers, events = _run(session.Turn(session.Source("p.png", _picture()), index, fake.url, log_path=log,
+                                            pace=0))
+        solving = fake.requests[2]
+    assert solving["model"] == "text-only" and solving["tools"][0]["function"]["name"] == "calculate"
+    assert answers[0].startswith("**Problem.**\n\n" + COIN + "\n\n**Solution.**\n\n**Given:**")
+    assert "**Answer:** $0.1171875$" in answers[0]
+    assert answers[0].endswith("*Part of the picture couldn't be read: the last line.*")
+    entry = json.loads(log.read_text(encoding="utf-8"))["answers"][0]
+    assert entry["from"] == "solver:text-only" and entry["agree"] is None
+    assert entry["solutions"][0]["tool_log"] == [{"expression": "comb(10, 3) / 2**10", "result": "15/128 ≈ 0.1171875"}]
 
 
 def test_every_problem_in_a_picture_gets_its_own_answer(index):
-    reply = _reply(("1.1", MARBLES), ("", "A die is rolled 4 times."))
-    with FakeOllama(MODELS, replies=[reply, reply]) as fake:
+    reply = _reply(("1.1", MARBLES), ("", COIN))
+    with FakeOllama(MODELS, replies=[reply, reply] + QWEN_SOLVES) as fake:
         answers, events = _run(session.Turn(session.Source("p.png", _picture()), index, fake.url, pace=0))
     assert len(answers) == 2 and [e[0] for e in events].count("start") == 2
-    assert "**Solution.**" in answers[0] and session.NOT_YET in answers[1]
+    assert r"\mathbf{0.3182}" in answers[0] and "**Answer:** $0.1171875$" in answers[1]
+
+
+def _gemini_turn(index, ollama_url, gem_url, log=None, text=COIN):
+    return session.Turn(session.Source("typed", text=text), index, ollama_url, log_path=log, pace=0,
+                        gemini_key="test-key", gemini_base=gem_url)
+
+
+def test_with_a_key_both_solve_and_geminis_solution_is_shown_when_they_agree(index, tmp_path):
+    from fake_gemini import FakeGemini, call, text
+    log = tmp_path / "history.jsonl"
+    with FakeOllama(MODELS, replies=QWEN_SOLVES) as qwen, \
+            FakeGemini(replies=[call("comb(10, 3) * 0.5**10"), text("Gemini's way.\n\n**Answer:** 0.1172")]) as gem:
+        answers, events = _run(_gemini_turn(index, qwen.url, gem.url, log))
+    assert "Gemini's way." in answers[0] and "Checking the answer…" in [e[1] for e in events if e[0] == "status"]
+    raw = log.read_text(encoding="utf-8")
+    entry = json.loads(raw)["answers"][0]
+    assert entry["from"] == "solver:gemini-3.8-flash" and entry["agree"] is True and not entry["rechecked"]
+    assert {s["solver"] for s in entry["solutions"]} == {"qwen", "gemini"} and "test-key" not in raw
+
+
+def test_when_they_disagree_gemini_rechecks_once_and_its_answer_is_shown(index):
+    from fake_gemini import FakeGemini, call, text
+    # Gemini's first answer is calculator-backed but for 4 heads (so the answer check passes and they disagree)
+    gem_replies = [call("comb(10, 4) / 2**10"), text("**Answer:** 0.205078125"), call("comb(10, 3) / 2**10"),
+                   text("I recomputed it.\n\n**Answer:** 0.1171875"), text("never asked")]
+    with FakeOllama(MODELS, replies=QWEN_SOLVES) as qwen, FakeGemini(replies=gem_replies) as gem:
+        turn = _gemini_turn(index, qwen.url, gem.url)
+        answers, _ = _run(turn)
+        recheck = gem.bodies()[2]["contents"][-1]["parts"][0]["text"]
+    assert "Another solver's final answer was: **Answer:** $0.1171875$" in recheck
+    assert "I recomputed it." in answers[0] and turn.answers[0]["rechecked"] is True
+    assert turn.answers[0]["agree"] is False
+
+
+def test_geminis_used_up_quota_gives_qwens_solution_and_says_why(index):
+    from fake_gemini import FakeGemini
+    with FakeOllama(MODELS, replies=QWEN_SOLVES) as qwen, \
+            FakeGemini(replies=[{"status": 429, "message": "Resource has been exhausted"}]) as gem:
+        turn = _gemini_turn(index, qwen.url, gem.url)
+        answers, _ = _run(turn)
+    assert "**Answer:** $0.1171875$" in answers[0] and turn.answers[0]["from"] == "solver:text-only"
+    assert "free quota is used up" in turn.gemini_problem and "gemini" in turn.answers[0]["errors"]
+
+
+def test_without_ollama_a_typed_problem_is_solved_by_gemini_alone(index):
+    from fake_gemini import FakeGemini, call, text
+    with FakeGemini(replies=[call("comb(10, 3) / 2**10"), text("**Answer:** 0.1171875")]) as gem:
+        turn = _gemini_turn(index, "http://127.0.0.1:9", gem.url)
+        answers, _ = _run(turn)
+    assert "**Answer:** 0.1171875" in answers[0] and turn.answers[0]["from"] == "solver:gemini-3.8-flash"
+    assert "isn't running" in turn.answers[0]["errors"]["qwen"]
+
+
+def test_without_ollama_or_a_key_a_new_problem_needs_setting_up(index):
+    turn = session.Turn(session.Source("typed", text=COIN), index, "http://127.0.0.1:9", pace=0)
+    with pytest.raises(ollama.NotReady, match="isn't running"):
+        _run(turn)
 
 
 def test_typed_text_skips_reading_and_needs_no_ollama(index):
