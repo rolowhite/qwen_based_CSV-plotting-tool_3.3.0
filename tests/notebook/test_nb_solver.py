@@ -180,6 +180,21 @@ def test_a_per_minute_limit_waits_as_google_asks_and_a_used_up_model_falls_throu
     assert err.kind == "rate" and err.retry_after == 34.0 and "34 s" in str(err)
 
 
+def test_a_model_that_stalls_counts_as_busy_and_falls_through():
+    with FakeGemini(slow={"gemini-3.8-flash": 2}, replies=[fg.text("**Answer:** 0.1171875")]) as fake:
+        backend = solver.GeminiBackend(gemini.Gemini("test-key", base=fake.url, timeout=0.5), "gemini-3.8-flash",
+                                       gemini.MODELS)
+        sol = solver.solve(backend, COIN + " It is 0.1171875.")
+    assert sol.model == "gemini-3.6-flash"
+    err = None
+    with FakeGemini(slow={"gemini-3.8-flash": 2}) as fake:
+        try:
+            gemini.Gemini("test-key", base=fake.url, timeout=0.5).generate("gemini-3.8-flash", {})
+        except gemini.GeminiError as exc:
+            err = exc
+    assert err is not None and err.kind == "busy" and "didn't answer within" in str(err)
+
+
 def test_the_answer_may_follow_a_lone_answer_label():
     md = "Steps.\n\n**Answer:**\n\n$P(X=2)=0.2009$\n\nThat is all."
     assert solver.answer_text(md) == "**Answer:**\n\n$P(X=2)=0.2009$"

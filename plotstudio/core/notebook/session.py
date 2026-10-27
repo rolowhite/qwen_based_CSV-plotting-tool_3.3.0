@@ -26,7 +26,8 @@ NOTHING = "I couldn't find a problem in this picture. Try a sharper picture, or 
 PACE = 0.03              # seconds between streamed pieces
 WORDS = 3                # words per piece
 SECOND_READ = 1.5        # the second read sends the picture this much bigger (or smaller, past the size cap)
-QWEN_BUDGET = 180        # s the local model may take to solve one problem (a looping model is stopped)
+SOLVE_BUDGET = 180       # s each solver may take for one problem (a looping or stalled model is stopped)
+GEMINI_GRACE = 90        # s Gemini may go on after the local model has its answer, before that one is used
 
 
 @dataclass
@@ -204,23 +205,30 @@ class Turn:
             except BaseException as exc:  # noqa: BLE001 - kept: the other solver may still answer
                 results[name] = exc
 
-        threads = [threading.Thread(target=work, args=(n, b, i), daemon=True) for n, (b, i) in jobs.items()]
-        budget = threading.Timer(QWEN_BUDGET, qwen.cancel) if qwen is not None else None
-        for t in threads:
+        threads = {n: threading.Thread(target=work, args=(n, b, i), daemon=True) for n, (b, i) in jobs.items()}
+        timers = [threading.Timer(SOLVE_BUDGET, b.cancel) for b, _ in jobs.values()]      # a looping model stops
+        for t in list(threads.values()) + timers:
+            t.daemon = True
             t.start()
-        if budget is not None:
-            budget.daemon = True
-            budget.start()
-        for t in threads:
+        if "qwen" in threads and "gemini" in threads:
+            threads["qwen"].join()
+            if isinstance(results.get("qwen"), solver.Solution):
+                threads["gemini"].join(GEMINI_GRACE)        # qwen has an answer: Gemini gets a little longer
+                if threads["gemini"].is_alive():
+                    gem.cancel()
+        for t in threads.values():
             t.join()
-        if budget is not None:
-            budget.cancel()
+        for t in timers:
+            t.cancel()
         if self.chat.cancelled:
             raise ollama.Cancelled()
-        if isinstance(results.get("qwen"), (ollama.Cancelled, ollama.OllamaError)) and qwen.chat.cancelled:
+        stopped = (ollama.Cancelled, gemini.Cancelled, ollama.OllamaError, gemini.GeminiError)
+        if qwen is not None and qwen.chat.cancelled and isinstance(results.get("qwen"), stopped):
             results["qwen"] = solver.SolverError(
-                f"This problem took the model on this computer more than {QWEN_BUDGET // 60} minutes, so it was "
+                f"This problem took the model on this computer more than {SOLVE_BUDGET // 60} minutes, so it was "
                 "stopped. A free Gemini key (model menu at the top) helps with long problems.")
+        if gem is not None and gem.client.cancelled and isinstance(results.get("gemini"), stopped):
+            results["gemini"] = gemini.GeminiError("Gemini took too long this time.", "busy")
         errors = {n: f"{type(r).__name__}: {r}" for n, r in results.items() if isinstance(r, BaseException)}
         if qwen is None:
             errors["qwen"] = f"{type(qwen_problem).__name__}: {qwen_problem}"

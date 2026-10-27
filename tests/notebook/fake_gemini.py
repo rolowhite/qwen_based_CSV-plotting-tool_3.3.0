@@ -8,6 +8,7 @@ without the right x-goog-api-key gets Google's 400 "API key not valid". Requests
 as (path, headers, body).
 """
 import json
+import time
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -26,8 +27,10 @@ def call(*expressions, signature="sig-1"):
 
 
 class FakeGemini:
-    def __init__(self, key="test-key", replies=(), models=MODELS, busy=(), out_of_quota=(), rate_limited=()):
+    def __init__(self, key="test-key", replies=(), models=MODELS, busy=(), out_of_quota=(), rate_limited=(),
+                 slow=None):
         self.key, self.replies, self.models, self.requests = key, list(replies), list(models), []
+        self.slow = dict(slow or {})            # model -> seconds it stalls before answering
         self.busy = set(busy)                   # models that answer 503 "high demand"
         self.out_of_quota = set(out_of_quota)   # 429, the free requests per day are used up
         self.rate_limited = set(rate_limited)   # 429 once, per minute, "retry in 1s" (then answer)
@@ -67,6 +70,8 @@ class FakeGemini:
                 if model not in fake.models:
                     self._json(404, {"error": {"code": 404, "message": f"models/{model} is not found"}})
                     return
+                if model in fake.slow:
+                    time.sleep(fake.slow[model])
                 if model in fake.out_of_quota or model in fake.rate_limited:
                     per_day = model in fake.out_of_quota
                     fake.rate_limited.discard(model)

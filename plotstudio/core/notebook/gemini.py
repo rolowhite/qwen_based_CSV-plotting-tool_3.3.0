@@ -64,7 +64,7 @@ def _error(status: int, body: bytes, model: str = "") -> GeminiError:
 class Gemini:
     """One call at a time; `cancel()` may be called from any thread."""
 
-    def __init__(self, key: str, base: str = BASE_URL, timeout: float = 180.0):
+    def __init__(self, key: str, base: str = BASE_URL, timeout: float = 60.0):
         if not key or not key.strip():
             raise GeminiError("No Gemini key is set.", "key")
         self._key = key.strip()
@@ -107,6 +107,8 @@ class Gemini:
         except (OSError, http.client.HTTPException) as exc:
             if self.cancelled:
                 raise Cancelled() from exc
+            if isinstance(exc, TimeoutError):           # a model in high demand sometimes accepts and then stalls
+                raise GeminiError(f"Gemini didn't answer within {self.timeout:.0f} s (busy).", "busy") from exc
             raise GeminiError(f"No connection to Gemini ({type(exc).__name__}). Is the internet on?",
                               "network") from exc
         finally:
