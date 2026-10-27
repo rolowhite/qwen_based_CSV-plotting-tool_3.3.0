@@ -67,3 +67,9 @@ def test_answer_page_draws_math_in_the_browser():
     page = render.answer_page("**Problem.** Find $P(X<0.2)$.\n\n$$F(x)=1-e^{-8x}$$", dark=True)
     assert 'data-theme="dark"' in page and "katex.min.js" in page
     assert '<span class="math inline">P(X&lt;0.2)</span>' in page and "<strong>Problem.</strong>" in page
+
+
+def test_underline_is_drawn_and_a_lone_backslash_is_a_tex_error_not_a_crash():
+    assert tex.png(r"\underline{ab}")                      # Duncan's multiple-range diagrams
+    with pytest.raises(tex.TexError):
+        tex.png("a+\\")

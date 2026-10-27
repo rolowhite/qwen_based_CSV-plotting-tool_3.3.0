@@ -37,12 +37,20 @@ _FRAC_TEX = re.compile(r"\\[dt]?frac\s*(?:\{\s*(-?\d+)\s*\}|(\d))\s*(?:\{\s*(\d+
 _TEX_CMD = re.compile(r"\\[A-Za-z]+")
 _MENTION = re.compile(r"\b(?:Exercises?|Ex\.)\s*\d+\.\d+(?:\s*(?:and|,|–|-)\s*\d+\.\d+)*", re.I)
 _REF = re.compile(r"(\d+)\.(\d+)")
-_LABEL = re.compile(r"^\s*(?:\*\*)?(?:(?:Exercise|Ex\.?|Problem)\s*)?(\d{1,2})\.(\d{1,3})\b(?!\.\d)", re.I)
+# "Exercise 3.29 gives the joint density ..." starts with a reference to another exercise, not with the problem's own number
+_LABEL = re.compile(r"^\s*(?:\*\*)?(?:(?:Exercise|Ex\.?|Problem)\s*)?(\d{1,2})\.(\d{1,3})\b(?!\.\d)"
+                    r"(?!\s*(?:gives?|concerns?|showed|shows?|dealt|deals?|presents?|describes?|contains?|asks?)\b)", re.I)
 # 20,000 is one number, but inside a list written without spaces ("33,56,122,83") the commas separate values.
 # A subscript counts ($x_2$ like $x_{2}$); a letter before a digit hides it (x2). "1/4" is a fraction, "102 / 83"
 # is two values (the library separates table rows with " / ").
-_NUMBER = re.compile(r"(?<![A-Za-z0-9.])(-?(?:(?<!\d,)\d{1,3}(?:,\d{3})+(?!,\d)|\d+)(?:\.\d+)?|-?\.\d+)(?:/(\d+))?"
-                     r"(?![\w])")
+# Scientific notation (2.56e-06, 2.56 \\times 10^{-6}) is one number. Subscripts and exponents (x_1, \\chi^2, t_{14}) are
+# labels, not data: the PDF text layer writes them as plain "x1", "X2", which a letter before a digit already hides,
+# so both sides of a comparison drop them. "on page 13" is where the book printed the exercise, not a number of it.
+_NUMBER = re.compile(r"(?<![A-Za-z0-9.])(-?(?:(?<!\d,)\d{1,3}(?:,\d{3})+(?!,\d)|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"
+                     r"|-?\.\d+(?:[eE][+-]?\d+)?)(?:/(\d+))?(?![\w])")
+_SCI_TEX = re.compile(r"(\d(?:\.\d+)?)\s*(?:\\times|\\cdot|×)\s*10\s*\^\s*\{?\s*([+-]?\d+)\s*\}?")
+_SCRIPT = re.compile(r"[_^]\s*(?:\{[^{}]*\}|[+-]?\d+|[A-Za-z])")
+_PAGE = re.compile(r"\b(?:on\s+)?pages?\s+\d+(?:\s*[-–]\s*\d+)?", re.I)
 _WORD = re.compile(r"[a-z]+")
 
 
@@ -62,12 +70,23 @@ def _norm_decimal(text: str) -> str:
     return ("-" + t) if neg and t != "0" else t
 
 
+def _norm_number(text: str) -> str:
+    """_norm_decimal, and one spelling for scientific notation and tiny decimals ('2.56e-06', '0.00000256')."""
+    t = text.replace(",", "")
+    if "e" in t.lower():
+        return f"{float(t):.10g}"
+    t = _norm_decimal(t)
+    return f"{float(t):.10g}" if 0 < abs(float(t)) < 1e-4 else t
+
+
 def numbers(text: str) -> List[str]:
     """Every number in the text, normalised. A fraction gives both forms: '1/4' -> ['1/4', '0.25'].
     A mention of another exercise gives 'ex3.49'."""
+    text = text.replace("−", "-")  # the minus sign − (the library's tables) is the same as a hyphen-minus
+    text = _SCI_TEX.sub(r"\1e\2", text)
     text = _FRAC_TEX.sub(lambda m: f" {m.group(1) or m.group(2)}/{m.group(3) or m.group(4)} ", text)
     text = _TEX_CMD.sub(" ", text)      # "\le1" and "\le 1" are the same 1 (a letter before a digit hides it)
-    text = text.replace("−", "-")  # the minus sign − (the library's tables) is the same as a hyphen-minus
+    text = _PAGE.sub(" ", _SCRIPT.sub(" ", text))
     # "the data of Exercise 3.49" is not a value of this problem, but it tells 3.54 from 3.55: keep it as "ex3.49"
     out = [f"ex{int(a)}.{int(b)}" for m in _MENTION.finditer(text) for a, b in _REF.findall(m.group(0))]
     text = _MENTION.sub(" ", text)
@@ -78,7 +97,7 @@ def numbers(text: str) -> List[str]:
             value = Fraction(int(whole), int(denominator))
             out.append(_norm_decimal(f"{float(value):.6f}"))
         else:
-            out.append(_norm_decimal(whole))
+            out.append(_norm_number(whole))
             if denominator is not None:
                 out.append(str(int(denominator)))
     return out

@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import queue
 import re
 import threading
 import time
@@ -28,6 +29,8 @@ WORDS = 3                # words per piece
 SECOND_READ = 1.5        # the second read sends the picture this much bigger (or smaller, past the size cap)
 SOLVE_BUDGET = 180       # s each solver may take for one problem (a looping or stalled model is stopped)
 GEMINI_GRACE = 90        # s Gemini may go on after the local model has its answer, before that one is used
+QWEN_GRACE = 30          # s the local model may go on after Gemini has its answer (usually first), to cross-check it
+STREAM_MAX = 1.2         # s at most to show a stored or finished answer: the words are only paced, never waited for
 
 
 @dataclass
@@ -44,9 +47,10 @@ class Source:
 
 
 def second_size(first: int) -> int:
-    """The long side for the second read: 1.5x the first, or 1/1.5x when that would pass the size cap."""
-    bigger = round(first * SECOND_READ)
-    return bigger if bigger <= ollama.LONG_SIDE_MAX else max(ollama.LONG_SIDE_MIN, round(first / SECOND_READ))
+    """The long side for the second read: 1.5x the first, up to the size cap; smaller only when it is already
+    at the cap (a second look at a bigger picture can't be bigger)."""
+    bigger = min(round(first * SECOND_READ), ollama.LONG_SIDE_MAX)
+    return bigger if bigger >= first * 1.15 else max(ollama.LONG_SIDE_MIN, round(first / SECOND_READ))
 
 
 def answer_markdown(problem: reader.Problem, solution_md: str, unreadable=()) -> str:
@@ -79,6 +83,7 @@ class Turn:
         self.match = match              # False: always solve (the live eval), the library still gives context
         self.gemini_problem = None      # why Gemini didn't help this turn (the page shows it in the Model menu)
         self._backends = []
+        self._notes = {}                # problem text -> which number was read differently from the library's
 
     def cancel(self):
         self.chat.cancel()
@@ -98,6 +103,11 @@ class Turn:
             for problem, exercise in zip(problems, hits):
                 if exercise is not None:
                     markdown, info = exercise.solution_md, {"from": f"library:{exercise.key}"}
+                    note = self._notes.get(problem.markdown)
+                    if note:        # a blurred digit may be why a number differs: say so, the page is the judge
+                        markdown += f"\n\n*Matched to Exercise {exercise.number} of {exercise.book.title()} by its " \
+                                    f"number and wording; one number differs ({note}). Check it against your page.*"
+                        info["note"] = note
                 else:
                     shown, info = self._solve(emit, problem)
                     markdown = shown.markdown
@@ -113,15 +123,24 @@ class Turn:
     def _match(self, problem: reader.Problem):
         if self.index is None or not self.match:
             return None
-        return library_match.match(self.index, problem.markdown, problem.label)
+        exercise, note = library_match.match_with_note(self.index, problem.markdown, problem.label)
+        if note:
+            self._notes[problem.markdown] = note
+        return exercise
+
+    def _near(self, problem: reader.Problem) -> bool:
+        return self.index is not None and self.match and library_match.near(self.index, problem.markdown, problem.label)
 
     def _context(self, text: str) -> str:
-        """The problems of the exercises `text` mentions ("the joint density of Exercise 3.40"), from the library."""
+        """The problems of the exercises `text` mentions ("the joint density of Exercise 3.40"), from the library.
+        Two books number their exercises alike: the book of the closest library problem decides."""
         if self.index is None:
             return ""
+        best = self.index.lookup(text).best
+        book = best.exercise.book if best is not None and best.score >= lookup.LOW else None
         found = []
         for token in dict.fromkeys(t for t in lookup.numbers(text) if t.startswith("ex")):
-            exercise = self.index.library.get(token[2:])
+            exercise = self.index.library.get(token[2:], book)
             if exercise is not None and exercise.has_problem:
                 found.append(f"Exercise {exercise.number}: " + exercise.problem_md.replace("**Problem:**", "", 1).strip())
         return "\n\n".join(found)[:6000]
@@ -139,7 +158,20 @@ class Turn:
         caps = dict(found)[name]
         return name, (False if "thinking" in caps else None)      # thinking only slows plain copying down
 
+    def _from_text_layer(self):
+        """A digital PDF's own text, exact characters: when it alone is a library problem, no model has to read the
+        picture (the slowest step). Anything less than a sure match falls through to the usual reading."""
+        text = reader.clean_text(self.source.hint)
+        if not text or self.index is None or not self.match:
+            return None
+        problem = reader.Problem("", text)
+        exercise = self._match(problem)
+        return ([problem], [exercise]) if exercise is not None else None
+
     def _read(self, emit):
+        quick = self._from_text_layer()
+        if quick is not None:
+            return quick
         self.model, think = self._pick_model()
         image, hint = self.source.image, self.source.hint
         emit(("status", "Reading the problem…"))
@@ -153,6 +185,8 @@ class Turn:
         problems, hits = first.problems, [self._match(p) for p in first.problems]
         if problems and all(hits):
             return problems, hits
+        if problems and not any(self._near(p) for p in problems):
+            return problems, hits           # not in the library at all: another reading would only cost its minute
         emit(("status", "Reading it again more closely…"))
         size = second_size(ollama.sent_size(max(image.size)))
         second = reader.read(self.chat, self.model, image, hint, think, long_side=size)
@@ -197,6 +231,7 @@ class Turn:
             raise qwen_problem
         self._backends = [b for b, _ in jobs.values()]
         results, used, cancelled = {}, {}, (lambda: self.chat.cancelled)
+        finished = queue.Queue()        # who answers first sets the pace; the other gets only a short grace
         context = self._context(problem.markdown)
 
         def work(name, backend, image):
@@ -214,18 +249,25 @@ class Turn:
                     results[name] = solver.solve(fresh, problem.markdown, image, cancelled, context)
             except BaseException as exc:  # noqa: BLE001 - kept: the other solver may still answer
                 results[name] = exc
+            finally:
+                finished.put(name)
 
         threads = {n: threading.Thread(target=work, args=(n, b, i), daemon=True) for n, (b, i) in jobs.items()}
         timers = [threading.Timer(SOLVE_BUDGET, b.cancel) for b, _ in jobs.values()]      # a looping model stops
         for t in list(threads.values()) + timers:
             t.daemon = True
             t.start()
+        cut = None
         if "qwen" in threads and "gemini" in threads:
-            threads["qwen"].join()
-            if isinstance(results.get("qwen"), solver.Solution):
-                threads["gemini"].join(GEMINI_GRACE)        # qwen has an answer: Gemini gets a little longer
-                if threads["gemini"].is_alive():
-                    gem.cancel()
+            first = finished.get()
+            other = "qwen" if first == "gemini" else "gemini"
+            if isinstance(results.get(first), solver.Solution):
+                # an answer exists: the other solver only cross-checks it, so it gets a little longer, not minutes
+                threads[other].join(QWEN_GRACE if first == "gemini" else GEMINI_GRACE)
+                if threads[other].is_alive():
+                    cut = other
+                    used_backend = qwen if other == "qwen" else gem
+                    used_backend.cancel()
         for t in threads.values():
             t.join()
         for t in timers:
@@ -233,7 +275,9 @@ class Turn:
         if self.chat.cancelled:
             raise ollama.Cancelled()
         stopped = (ollama.Cancelled, gemini.Cancelled, ollama.OllamaError, gemini.GeminiError)
-        if qwen is not None and qwen.chat.cancelled and isinstance(results.get("qwen"), stopped):
+        if cut == "qwen" and isinstance(results.get("qwen"), stopped):
+            results["qwen"] = solver.SolverError("stopped: Gemini had already answered")
+        elif qwen is not None and qwen.chat.cancelled and isinstance(results.get("qwen"), stopped):
             results["qwen"] = solver.SolverError(
                 f"This problem took the model on this computer more than {SOLVE_BUDGET // 60} minutes, so it was "
                 "stopped. A free Gemini key (model menu at the top) helps with long problems.")
@@ -246,7 +290,7 @@ class Turn:
             self.gemini_problem = str(results["gemini"])
         ok = {n: r for n, r in results.items() if isinstance(r, solver.Solution)}
         if not ok:
-            raise results.get("gemini") or results["qwen"]
+            raise results.get("qwen") or results["gemini"]       # the local model's reason first: it is always there
         agree, rechecked = None, False
         shown = ok.get("gemini") or ok["qwen"]
         if len(ok) == 2:
@@ -257,7 +301,7 @@ class Turn:
                     shown = solver.recheck(used["gemini"], ok["gemini"], solver.answer_text(ok["qwen"].markdown),
                                            problem.markdown, cancelled)
                     rechecked = True
-                except (gemini.GeminiError, solver.SolverError) as exc:
+                except (gemini.GeminiError, gemini.Cancelled, solver.SolverError) as exc:
                     errors["recheck"] = f"{type(exc).__name__}: {exc}"
         info = {"from": f"solver:{shown.model}", "agree": agree, "rechecked": rechecked, "errors": errors,
                 "solutions": [{"solver": n, "model": s.model, "seconds": s.seconds, "checked": s.checked,
@@ -268,11 +312,12 @@ class Turn:
     def _stream(self, emit, markdown: str, problem, info: dict):
         emit(("start", None))
         pieces = re.findall(r"\s*\S+", markdown)
+        pace = min(self.pace, STREAM_MAX / max(1, len(pieces) // WORDS))      # a long answer is not slower to show
         for i in range(0, len(pieces), WORDS):
             if self.chat.cancelled:
                 raise ollama.Cancelled()
             emit(("text", "".join(pieces[i:i + WORDS])))
-            time.sleep(self.pace)
+            time.sleep(pace)
         self.answers.append({"problem": problem.markdown if problem else "", "label": problem.label if problem else "",
                              **info, "answer": markdown})
         emit(("end", markdown))

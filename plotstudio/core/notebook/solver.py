@@ -32,7 +32,9 @@ SYSTEM = """You are a statistics tutor writing a worked solution on a board.
 - calculate understands + - * / ** ( ), comb(n, k), perm(n, k), factorial(n), sqrt, exp, log(x, base), ln, abs,
   round, min, max, sum, mean, var, stdev (sample), pvar, pstdev (population), Fraction(a, b), and
   dist(name, fn, x, **params) with name in norm, t, chi2, f, binom, poisson, hypergeom, geom, nbinom, expon,
-  gamma, uniform and fn in pdf, pmf, cdf, sf, ppf, isf, using scipy's parameter names, for example
+  gamma, uniform, weibull_min (c, scale), beta (a, b), lognorm (s, scale), studentized_range (k, df) and fn in
+  pdf, pmf, cdf, sf, ppf, isf, using scipy's parameter names. hypergeom is dist('hypergeom', 'pmf', x, M=population,
+  n=successes in the population, N=draws), not the book's N, k, n. For example
   dist('binom', 'pmf', 3, n=10, p=0.5), dist('norm', 'cdf', 1.96, loc=0, scale=1), dist('t', 'ppf', 0.975, df=14).
   Use dist for distribution values instead of printed tables.
 - Write math as LaTeX in $...$ or $$...$$.

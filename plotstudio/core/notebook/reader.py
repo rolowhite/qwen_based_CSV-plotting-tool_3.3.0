@@ -121,6 +121,13 @@ def read(chat: "ollama.Chat", model: str, image, hint: str = "", think: Optional
 
 
 # --------------------------------------------------------------------------------------------- PDFs --
+def clean_text(text: str) -> str:
+    """A PDF text layer without the characters that only break matching: soft hyphens, replacement characters
+    and a word cut by a hyphen at a line's end (the cut is kept as a space when the next line starts a new word)."""
+    text = (text or "").replace("\ufffd", "").replace("\u00ad", "").replace("\r\n", "\n").replace("\r", "\n")
+    return re.sub(r"[ \t]*\n[ \t]*", "\n", text).strip()
+
+
 def text_layer(doc, index: int, box: Optional[Box] = None, view=None) -> str:
     """The text layer of page `index` of an open PdfDoc ('' if it has none or copying is not allowed).
     `box` is in the pixels of the picture drawn with `view`."""
@@ -137,7 +144,7 @@ def text_layer(doc, index: int, box: Optional[Box] = None, view=None) -> str:
                 text = textpage.get_text_range()
         finally:
             textpage.close()
-    return text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    return clean_text(text)
 
 
 def page_image(doc, index: int, box: Optional[Box] = None, view=None):

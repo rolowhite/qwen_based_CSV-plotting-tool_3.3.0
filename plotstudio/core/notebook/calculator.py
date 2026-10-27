@@ -21,9 +21,9 @@ MAX_INT_ARG = 10_000          # factorial, comb, perm
 MAX_DIGITS = 1_000            # an exact result longer than this is refused
 
 DISTRIBUTIONS = {"norm", "t", "chi2", "f", "binom", "poisson", "hypergeom", "geom", "nbinom", "expon", "gamma",
-                 "uniform"}
+                 "uniform", "weibull_min", "beta", "lognorm", "studentized_range"}
 DIST_FUNCTIONS = {"pdf", "pmf", "cdf", "sf", "ppf", "isf"}
-DIST_PARAMS = {"loc", "scale", "df", "dfn", "dfd", "n", "p", "mu", "M", "N", "a"}
+DIST_PARAMS = {"loc", "scale", "df", "dfn", "dfd", "n", "p", "mu", "M", "N", "a", "b", "c", "s", "k"}
 CONSTANTS = {"pi": math.pi, "e": math.e}
 BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,
           ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod}

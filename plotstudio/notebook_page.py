@@ -33,7 +33,7 @@ IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"
 GUTTER = 12
 THUMB = 240             # px: the long side of the picture in a bubble
 STREAM = object()       # marks a streamed event in the job queue (the job isn't finished yet)
-LIBRARY_FILES = (nb_library.BUILT_IN,)    # the solutions every answer comes from (for now); tests swap in their own
+LIBRARY_FILES = nb_library.BUILT_IN_FILES    # the solutions every answer comes from (for now); tests swap in their own
 OWN_PROGRESS = {"setup"}                  # jobs that show their own progress bar, not the header's busy bar
 GEMINI_NOTICE = ("Gemini (Google) then solves new problems alongside the model on this computer, and its solution "
                  "is shown. The problem's text and picture are sent to Google for that. With a free key, Google may "

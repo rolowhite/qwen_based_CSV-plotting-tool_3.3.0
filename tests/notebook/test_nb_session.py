@@ -1,5 +1,6 @@
 """One turn: read (a fake Ollama), match, stream the answer, read again on a miss, log, and Stop."""
 import json
+import time
 import threading
 
 import pytest
@@ -58,7 +59,7 @@ def test_a_miss_reads_again_at_another_size_and_can_still_hit(index):
     assert "Reading it again more closely…" in [e[1] for e in events if e[0] == "status"]
     assert "**Solution.**" in answers[0] and MARBLES in answers[0]
     assert session.second_size(1200) == 1800 and session.second_size(2000) == 1333
-    assert session.second_size(1400) == ollama.LONG_SIDE_MIN
+    assert session.second_size(1500) == ollama.LONG_SIDE_MAX        # bigger, up to the cap, never smaller (a bug)
 
 
 def test_a_first_read_that_breaks_is_followed_by_the_second(index):
@@ -79,11 +80,11 @@ QWEN_SOLVES = [{"text": "**Given:** $n=10$, $p=0.5$. Binomial:", "calls": ["comb
 def test_a_problem_not_in_the_solutions_is_solved_and_says_what_couldnt_be_read(index, tmp_path):
     # replaces the 3.4.0 test of "I can't solve this one yet": such problems are now solved
     log = tmp_path / "history.jsonl"
-    replies = [_reply(("", COIN), unreadable=["the last line"]), _reply(("", COIN), unreadable=["the last line."])]
+    replies = [_reply(("", COIN), unreadable=["the last line"])]     # not in the library: no second reading
     with FakeOllama(MODELS, replies=replies + QWEN_SOLVES) as fake:
         answers, events = _run(session.Turn(session.Source("p.png", _picture()), index, fake.url, log_path=log,
                                             pace=0))
-        solving = fake.requests[2]
+        solving = fake.requests[1]
     assert solving["model"] == "text-only" and solving["tools"][0]["function"]["name"] == "calculate"
     assert answers[0].startswith("**Problem.**\n\n" + COIN + "\n\n**Solution.**\n\n**Given:**")
     assert "**Answer:** $0.1171875$" in answers[0]
@@ -207,6 +208,29 @@ def test_a_slow_gemini_gives_way_to_qwens_answer_after_the_grace_period(index, m
         answers, _ = _run(turn)
     assert "**Answer:** $0.1171875$" in answers[0] and turn.answers[0]["from"] == "solver:text-only"
     assert turn.gemini_problem == "Gemini took too long this time."
+
+
+def test_gemini_answering_first_is_not_kept_waiting_for_a_slow_local_model(index, monkeypatch):
+    from fake_gemini import FakeGemini, call, text
+    monkeypatch.setattr(session, "QWEN_GRACE", 0.3)
+    slow = [{"text": "thinking " * 40, "delay": 1.0}]               # qwen would need seconds: it must not be waited for
+    with FakeOllama(MODELS, replies=slow) as qwen, \
+            FakeGemini(replies=[call("comb(10, 3) * 0.5**10"), text("Gemini's way.\n\n**Answer:** 0.1172")]) as gem:
+        turn = _gemini_turn(index, qwen.url, gem.url)
+        start = time.perf_counter()
+        answers, _ = _run(turn)
+        took = time.perf_counter() - start
+    assert "Gemini's way." in answers[0] and turn.answers[0]["from"] == "solver:gemini-3.8-flash"
+    assert took < 3 and "Gemini had already answered" in turn.answers[0]["errors"]["qwen"]
+
+
+def test_a_pdf_text_layer_that_is_a_library_problem_needs_no_reading_model(index):
+    with FakeOllama(MODELS, replies=[]) as fake:
+        turn = session.Turn(session.Source("page.pdf", _picture(), hint="1.1 " + MARBLES.replace(" ", "\u00ad ", 1)
+                                           .replace("\u00ad ", " ")), index, fake.url, pace=0)
+        answers, events = _run(turn)
+        assert fake.requests == []                                         # the picture was never read
+    assert r"\mathbf{0.3182}" in answers[0] and "Reading the problem…" not in [e[1] for e in events]
 
 
 def test_without_ollama_or_a_key_a_new_problem_needs_setting_up(index):

@@ -214,3 +214,14 @@ def test_recheck_replaces_the_solution_only_when_it_gives_an_answer():
         again = solver.recheck(backend, first, "**Answer:** 0.1171875", COIN)
         assert "Another solver's final answer was: **Answer:** 0.1171875" in fake.bodies()[1]["contents"][-1]["parts"][0]["text"]
     assert solver.answer_text(again.markdown) == "**Answer:** 0.1171875" and again.checked
+
+
+def test_tiny_results_exponents_and_subscripts_are_not_unchecked_numbers():
+    # 2.56e-06 is one number (it was read as 2 and 6), and the 2 of chi^2 and the 14 of t_{14} are labels
+    answer = r"**Answer:** $p = 2.56 \times 10^{-6}$, $\chi^2 = 5.99$, $t_{14} = 2.14$"
+    log = [{"expression": "a", "result": "2.562013823e-06"}, {"expression": "b", "result": "5.99"},
+           {"expression": "c", "result": "2.14"}]
+    assert solver.unchecked(answer, "", log) == []                       # 2.56e-06 is 2.562e-06 to 3 digits
+    log[0]["result"] = "2.9e-06"
+    assert solver.unchecked(answer, "", log) == ["2.56e-06"]
+    assert solver.agree(answer, answer.replace("t_{14}", "t"), "") is True

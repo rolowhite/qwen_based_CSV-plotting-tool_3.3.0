@@ -22,8 +22,10 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 INDEX_VERSION = 1
-# the solutions that come with the app (Walpole, 9th edition, chapters 1-18); only read
-BUILT_IN = Path(__file__).resolve().parents[2] / "assets" / "notebook" / "Walpole_All_Chapters_Solutions.md"
+# the solutions that come with the app (Walpole 9th edition chapters 1-18, Lind 15th edition chapters 8-12); only read
+_NOTEBOOK_ASSETS = Path(__file__).resolve().parents[2] / "assets" / "notebook"
+BUILT_IN = _NOTEBOOK_ASSETS / "Walpole_All_Chapters_Solutions.md"
+BUILT_IN_FILES = (BUILT_IN, _NOTEBOOK_ASSETS / "Lind_Chapters_8_to_12_Solutions.md")
 EXERCISE_RE = re.compile(r"^###\s+Exercise\s+(\d+)\.(\d+)\s*(?:\((.+)\))?\s*$")
 CHAPTER_RE = re.compile(r"^#\s+.*?Chapter\s+(\d+)\b")
 TOPIC_RE = re.compile(r"^##\s+(.+?)\s*$")

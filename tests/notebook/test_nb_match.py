@@ -35,7 +35,11 @@ def test_a_book_page_that_says_more_than_the_library_still_matches_with_its_prin
     assert library_match.match(index, "1.1 " + page).number == "1.1"
     assert library_match.match(index, page, label="1.2") is None             # another printed number
     assert library_match.match(index, MARBLES + " Use 3 draws.", label="1.1") is None     # 3: not in the solution
-    assert library_match.match(index, MARBLES.replace("7 red", "8 red"), label="1.1") is None   # 7 is missing
+    assert library_match.match(index, MARBLES.replace("7 red", "8 red")) is None             # no printed number: exact only
+    # with the printed number and the same words, one number read differently is a blurred digit: matched, and told
+    blurred, note = library_match.match_with_note(index, MARBLES.replace("7 red", "8 red"), label="1.1")
+    assert blurred.number == "1.1" and note == "read 8, the book has 7"
+    assert library_match.match(index, MARBLES.replace("7 red", "8 red").replace("5 blue", "6 blue"), label="1.1") is None
 
 
 def test_an_exercise_without_its_own_problem_text_is_never_used(index):
@@ -83,8 +87,47 @@ def test_math_written_differently_keeps_the_same_numbers():
     assert lookup.numbers("20,000 parts and 1,234,567 more") == ["20000", "1234567"]
     # from real screenshots: the library's " / " between table rows (1.21), braced subscripts (12.62)
     assert lookup.numbers("98 102 / 83 55") == ["98", "102", "83", "55"] and lookup.numbers("1/4") == ["1/4", "0.25"]
-    assert library_match.problem_numbers("$x_2$ and $x_{2}$") == Counter({"2": 2})
+    # subscripts and exponents are labels: the PDF text layer writes x_1 as "x1", so neither side counts them
+    assert library_match.problem_numbers("$x_2$ and $x_{2}$ and X2 and $\\chi^2$") == Counter()
+    assert lookup.numbers("p = 2.56e-06, $2.56 \\times 10^{-6}$, 0.00000256") == ["2.56e-06"] * 3
+    assert lookup.numbers("Exercise 1.1 on page 13 and page 462: 7") == ["ex1.1", "7"]
+    assert lookup.leading_label("Exercise 3.29 gives the density") is None and lookup.leading_label("4.29 Find") == "4.29"
     assert library_match.problem_numbers("as in Exercise 1.28; see Exercise 1.28") == Counter({"ex1.28": 1})
     # the library writes \le1 and \pm0.0100, a model writes \le 1 and \pm 0.0100
     assert library_match.problem_numbers(r"$0\le y\le1$, $2.4\pm0.0100$") == \
         library_match.problem_numbers(r"$0 \le y \le 1$, $2.4 \pm 0.0100$")
+
+
+def test_both_built_in_books_load_and_a_shared_number_picks_by_the_words():
+    lib = library.load(library.BUILT_IN_FILES)
+    assert {e.book for e in lib.exercises} == {"walpole", "lind"} and not lib.problems
+    assert sum(e.book == "lind" for e in lib.exercises) == 327
+    index = lookup.Index(lib)
+    for number in ("8.1", "9.5", "10.12", "12.3"):            # numbers both books have
+        lind = lib.get(number, "lind")
+        text = lind.problem_md.replace("**Problem:**", "", 1).strip()
+        assert library_match.match(index, text, number) is lind and library_match.match(index, text) is lind
+
+
+def test_exercises_that_share_a_dataset_are_told_apart_by_their_words_and_number():
+    lib = library.load(library.BUILT_IN_FILES)
+    index = lookup.Index(lib)
+    groups = {}
+    for e in lib.exercises:
+        n = library_match.problem_numbers(e.problem_md)
+        if e.has_problem and sum(n.values()) >= 3:
+            groups.setdefault(frozenset(n.items()), []).append(e)
+    shared = [g for g in groups.values() if len(g) > 1]
+    assert shared                                                   # e.g. Walpole 1.4 and 10.107
+    for group in shared:
+        for e in group:
+            text = e.problem_md.replace("**Problem:**", "", 1).strip()
+            assert library_match.match(index, text, e.number) in (e, None)        # never another exercise's answer
+    named = [library_match.match(index, e.problem_md.replace("**Problem:**", "", 1).strip(), e.number) is e
+             for g in shared for e in g]
+    assert sum(named) >= 0.9 * len(named)
+
+
+def test_a_text_layer_without_latex_marks_still_matches(index):
+    layer = MARBLES.replace("$", "") + " on page 13"                  # no marks, a page reference
+    assert library_match.match(index, layer).number == "1.1"

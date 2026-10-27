@@ -15,7 +15,7 @@ REWRITES = {
     "le": r"\leq", "ge": r"\geq", "ne": r"\neq", "tfrac": r"\frac", "tbinom": r"\binom", "dbinom": r"\binom",
     "boxed": "", "fbox": "", "displaystyle": "", "textstyle": "", "lvert": "|", "rvert": "|",
     "lVert": r"\Vert", "rVert": r"\Vert", "textbf": r"\mathbf", "textit": r"\mathit", "textrm": r"\mathrm",
-    "dots": r"\ldots", "iff": r"\Leftrightarrow", "underbrace": "", "#": "\\# ",   # mathtext fails on \#H, not \# H
+    "dots": r"\ldots", "iff": r"\Leftrightarrow", "underbrace": "", "underline": r"\overline", "#": "\\# ",   # mathtext fails on \#H, not \# H
     **{f"{size}{side}": "" for size in ("big", "Big", "bigg", "Bigg") for side in ("", "l", "r", "m")},
 }
 # commands whose arguments may be written without braces (\frac12, \sqrt x, \mathbf v)
@@ -53,7 +53,7 @@ def _token_end(tex: str, i: int) -> int:
         return _group_end(tex, i)
     if tex[i] == "\\":
         m = re.match(r"\\(?:[A-Za-z]+|.)", tex[i:])
-        return i + len(m.group(0))
+        return i + (len(m.group(0)) if m else 1)       # a formula may end with a lone backslash
     return i + 1
 
 

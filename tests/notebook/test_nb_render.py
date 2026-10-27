@@ -4,6 +4,8 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import pytest
 
@@ -32,7 +34,7 @@ def test_the_page_works_offline(lib):
     page = render.chapter_page(lib, "sample", 1)
     assert not re.search(r"(src|href)=[\"']https?:", page), "nothing may come from the internet"
     for uri in re.findall(r"(?:src|href)=\"(file:[^\"]+)\"", page):
-        assert Path(uri.replace("file:///", "").replace("%20", " ")).is_file(), uri
+        assert Path(url2pathname(urlparse(uri).path)).is_file(), uri
     assert len(list((render.KATEX / "fonts").glob("*.woff2"))) == 20
 
 

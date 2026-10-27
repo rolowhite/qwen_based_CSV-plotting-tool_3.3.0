@@ -546,9 +546,11 @@ capabilities include `vision`). The Ollama address is `notebook_ollama_url` in t
 `http://localhost:11434`). Typed problems work without Ollama.
 
 **Known problems come from the worked solutions that come with the app:** Walpole, *Probability & Statistics for
-Engineers & Scientists*, 9th edition, chapters 1–18, 1,207 exercises. They are in
-`plotstudio/assets/notebook/Walpole_All_Chapters_Solutions.md` and load by themselves, so there is nothing to set
-up. The file is only read, never changed. It has front matter (`book:`, `edition:`), `### Exercise N.M` headings,
+Engineers & Scientists*, 9th edition, chapters 1–18, 1,207 exercises, and Lind, Marchal & Wathen, *Statistical
+Techniques in Business & Economics*, 15th edition, chapters 8–12, 327 exercises. They are in
+`plotstudio/assets/notebook/` (`Walpole_All_Chapters_Solutions.md`, `Lind_Chapters_8_to_12_Solutions.md`) and load by
+themselves, so there is nothing to set up. Both books number exercises alike (8.1 …), so the words of the problem
+decide which book it is from. The file is only read, never changed. It has front matter (`book:`, `edition:`), `### Exercise N.M` headings,
 `**Problem:**` blocks and `✔ *Checker: …*` lines.
 
 A stored solution is used only when the problem clearly matches one exercise that has its own `**Problem:**` text,
@@ -558,6 +560,19 @@ and in one of two ways:
 * or the picture prints that exercise's number (for example "12.62"), every number of the stored problem was read,
   and any other number read is one its solution uses. A book page often says more than the solution file's
   shorter problem text, such as $R^2$ and $s^2$ in parts the file leaves out.
+
+**With or without the printed exercise number.** A picture that prints the number ("12.62") and one that doesn't both
+work: the words and numbers of the problem are enough, and the printed number settles ties (two exercises that share
+a dataset, such as Walpole 1.4 and 10.107). When the number is printed and the words agree, one number read wrongly
+(a blurred digit) still matches, and the answer says which number differs. Subscripts and exponents (`x_1` / `x1`,
+`\chi^2`), page references ("on page 13"), soft hyphens and scientific notation (`2.56e-06` = `2.56 \times 10^{-6}`)
+no longer change the match. Measured on 400 library problems with the PDF text layer's noise added: no printed number
+0 → 90 % matched, printed number 5 % → 97 % with one digit changed, and no wrong exercise in 2,400 tries.
+
+**Speed.** A digital PDF's text layer that is itself a library problem is matched without reading the picture with
+the vision model (the slowest step). A problem that is not in the library is no longer read a second time. With a
+Gemini key, whichever solver finishes first is used and the other gets only 30 s (Gemini) or 90 s (local) to
+cross-check, instead of waiting minutes for the local model. A stored answer is shown in about a second.
 
 When a problem has fewer than two telling numbers (only "Exercise 1.1", 0, 1 or 2), it also needs the printed
 exercise number or nearly the same words, so another question about the same exercise is never given its answer.

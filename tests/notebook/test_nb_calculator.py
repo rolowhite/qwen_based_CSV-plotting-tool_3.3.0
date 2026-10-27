@@ -84,3 +84,10 @@ def test_results_are_exact_or_ten_digits():
     assert evaluate("1/3") == "1/3 ≈ 0.3333333333"
     assert evaluate("pi") == f"{math.pi:.10g}"
     assert evaluate("Fraction(1, 3) + 0.5") == "0.8333333333"           # a float makes it a float
+
+
+def test_weibull_beta_lognormal_and_the_studentized_range_are_known():
+    assert evaluate("dist('beta', 'cdf', 0.5, a=2, b=3)") == "0.6875"
+    assert evaluate("dist('weibull_min', 'cdf', 2, c=1.5, scale=3)") == "0.419770204"
+    assert evaluate("dist('lognorm', 'cdf', 2, s=0.5)") == "0.917171481"
+    assert evaluate("dist('studentized_range', 'ppf', 0.95, k=4, df=20)") == "3.958293561"
