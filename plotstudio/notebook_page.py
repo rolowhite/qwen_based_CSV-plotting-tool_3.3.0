@@ -396,7 +396,7 @@ class AnswerView(tk.Frame):
         ttk.Label(card, text=message, style="Raised.Muted.TLabel", wraplength=width, justify="left").pack(
             anchor="w", pady=(px(4), px(8)))
         for line in ("1.  Install Ollama from ollama.com (free; it runs on this PC, offline).",
-                     f"2.  In a terminal: {ollama.PULL_HINT}   (about 6 GB, once)"):
+                     f"2.  In a terminal: {ollama.PULL_HINT}   (about 5 GB, once)"):
             ttk.Label(card, text=line, style="Raised.TLabel", wraplength=width, justify="left").pack(anchor="w")
         ttk.Label(card, text="Typed problems work without it.", style="Raised.Faint.TLabel").pack(
             anchor="w", pady=(px(8), 0))

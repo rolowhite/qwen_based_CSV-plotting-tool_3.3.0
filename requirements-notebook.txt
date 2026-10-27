@@ -2,5 +2,5 @@
 # Without these the answers are shown as plain text.
 markdown-it-py>=3.0         # Markdown -> tokens / HTML (3.x supports Python 3.8+)
 mdit-py-plugins>=0.4        # $...$ and $$...$$ kept as TeX
-# Reading pictures needs Ollama (https://ollama.com) and a vision model, e.g. `ollama pull qwen3-vl:8b`: a program,
-# not a pip package. matplotlib (mathtext) comes with requirements.txt.
+# Reading pictures needs Ollama (https://ollama.com) and a vision model, e.g. `ollama pull qwen3-vl:8b-instruct`:
+# a program, not a pip package. matplotlib (mathtext) comes with requirements.txt.

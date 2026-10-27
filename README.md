@@ -520,7 +520,9 @@ Click **Notebook** on the gallery. It works like a chat:
 You are never asked to check or fix what was read. Pictures are read by a local vision model running in **Ollama**
 on your own computer, so no cloud and no account are involved:
 1. Install Ollama from [ollama.com](https://ollama.com).
-2. Run `ollama pull qwen3-vl:8b` once (about 6 GB; it fits an 8 GB graphics card).
+2. Run `ollama pull qwen3-vl:8b-instruct` once (about 5 GB; it fits an 8 GB graphics card). Use the `-instruct` build:
+   the plain `qwen3-vl:8b` tag is a thinking model that reasons at length instead of copying (about 110 s per
+   picture, and it may not finish on a photo). When several are installed, a model without thinking is preferred.
 
 The model menu in the header lists the installed models that can read pictures (any model whose Ollama
 capabilities include `vision`). The Ollama address is `notebook_ollama_url` in the settings file (default

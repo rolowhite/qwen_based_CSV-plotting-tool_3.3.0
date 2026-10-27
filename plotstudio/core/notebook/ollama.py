@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 DEFAULT_URL = "http://localhost:11434"
 LONG_SIDE_MAX = 2000      # px: bigger pictures only cost time
 LONG_SIDE_MIN = 1200      # px: small screenshots are scaled up so small print stays readable
-PULL_HINT = "ollama pull qwen3-vl:8b"
+PULL_HINT = "ollama pull qwen3-vl:8b-instruct"      # the build without thinking: it copies, fast
 
 
 class OllamaError(RuntimeError):
