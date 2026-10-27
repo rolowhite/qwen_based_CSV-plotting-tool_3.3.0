@@ -73,3 +73,18 @@ def test_underline_is_drawn_and_a_lone_backslash_is_a_tex_error_not_a_crash():
     assert tex.png(r"\underline{ab}")                      # Duncan's multiple-range diagrams
     with pytest.raises(tex.TexError):
         tex.png("a+\\")
+
+
+def test_remembered_pictures_come_back_the_same_and_a_bad_formula_stays_bad():
+    import threading
+    first = tex.png_cached(r"\frac{1}{2}", 11, 96, "#000000")
+    assert tex.png_cached(r"\frac{1}{2}", 11, 96, "#000000") is first
+    for _ in range(2):
+        with pytest.raises(tex.TexError):
+            tex.png_cached(r"\notacommand{", 11, 96, "#000000")
+    out = []
+    threads = [threading.Thread(target=lambda n=n: out.append(tex.png_cached(f"x_{n}+1", 11, 96, "#000000")))
+               for n in range(6)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert len(out) == 6 and all(o.startswith(b"\x89PNG") for o in out)

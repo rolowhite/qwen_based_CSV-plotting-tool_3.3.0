@@ -91,3 +91,16 @@ def test_weibull_beta_lognormal_and_the_studentized_range_are_known():
     assert evaluate("dist('weibull_min', 'cdf', 2, c=1.5, scale=3)") == "0.419770204"
     assert evaluate("dist('lognorm', 'cdf', 2, s=0.5)") == "0.917171481"
     assert evaluate("dist('studentized_range', 'ppf', 0.95, k=4, df=20)") == "3.958293561"
+
+
+def test_matrices_least_squares_correlation_and_integrals():
+    assert evaluate("det([[1, 2], [3, 4]])") == "-2"
+    assert evaluate("inv([[1, 2], [3, 4]])") == "[[-2, 1], [3/2 ≈ 1.5, -1/2 ≈ -0.5]]"
+    assert evaluate("matmul([[1, 2], [3, 4]], [[1], [1]])") == "[[3], [7]]"
+    assert evaluate("ols([[1, 1], [1, 2], [1, 3], [1, 4]], [2, 4, 5, 8])") == "[0, 19/10 ≈ 1.9]"     # y = 1.9 x
+    assert evaluate("corr([1, 2, 3, 4], [2, 4, 5, 8])") == "0.981155781"
+    assert evaluate("integrate('3*x**-4', 1, inf)") == "1" and evaluate("integrate('exp(-x)', 0, inf)") == "1"
+    for bad in ("inv([[1, 2], [2, 4]])", "det([[1, 2, 3]])", "integrate('integrate(\"x\", 0, 1)', 0, 1)",
+                "integrate('__import__(1)', 0, 1)", "inv([1, 2])"):
+        with pytest.raises(CalcError):
+            evaluate(bad)

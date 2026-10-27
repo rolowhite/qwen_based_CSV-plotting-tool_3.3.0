@@ -104,3 +104,13 @@ def test_a_text_pdf_gives_its_text_layer_and_a_marked_area(tmp_path):
         assert "Second problem" in part and "First problem" not in part
         crop = reader.page_image(doc, 0, box=lower, view=view)
         assert crop.size == (round(600 * k * 2), round(150 * k * 2))       # READ_DPI is twice PDF_DPI
+
+
+def test_a_blurred_picture_is_sharpened_for_the_second_reading_and_numbered_problems_split():
+    from PIL import Image
+    im = Image.new("RGB", (60, 40), (120, 120, 120))
+    sharp = reader.enhance(im)
+    assert sharp.size == im.size and sharp.mode == "RGB"
+    parts = reader.split_labelled("4.9 A die.\nFind P.\n4.10 A box.\nExercise 4.11 Show it.")
+    assert [(p.label, p.markdown) for p in parts] == [("4.9", "A die.\nFind P."), ("4.10", "A box."), ("4.11", "Show it.")]
+    assert reader.split_labelled("4.9 only one") == [] and reader.split_labelled("4.9 a\n4.9 b") == []

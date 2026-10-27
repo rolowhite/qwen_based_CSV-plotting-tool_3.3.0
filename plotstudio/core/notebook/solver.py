@@ -37,6 +37,8 @@ SYSTEM = """You are a statistics tutor writing a worked solution on a board.
   n=successes in the population, N=draws), not the book's N, k, n. For example
   dist('binom', 'pmf', 3, n=10, p=0.5), dist('norm', 'cdf', 1.96, loc=0, scale=1), dist('t', 'ppf', 0.975, df=14).
   Use dist for distribution values instead of printed tables.
+  Matrices are lists of rows: det(M), inv(M), matmul(A, B), transpose(M), and ols(X, y) for least squares (X has a
+  column of 1s for the intercept), all exact; corr(xs, ys); integrate('3*x**-4', 1, inf) integrates an expression in x.
 - Write math as LaTeX in $...$ or $$...$$.
 - End with one line that starts with **Answer:** and gives the final result of every part, in order."""
 
@@ -181,7 +183,8 @@ class GeminiBackend:
 
 
 # ------------------------------------------------------------------------------------------------ loop --
-def _rounds(backend, texts: List[str], log: List[dict], cancelled: Callable[[], bool]):
+def _rounds(backend, texts: List[str], log: List[dict], cancelled: Callable[[], bool],
+            progress: Optional[Callable[[int], None]] = None):
     for _ in range(MAX_ROUNDS):
         if cancelled():
             raise ollama.Cancelled()
@@ -199,6 +202,8 @@ def _rounds(backend, texts: List[str], log: List[dict], cancelled: Callable[[], 
             log.append({"expression": expression, "result": out})
             outputs.append(out)
         backend.results(calls, outputs)
+        if progress is not None:
+            progress(len(log))          # how many calculations so far: the page shows it while the solver works
     raise SolverError(f"The solver stopped after {MAX_ROUNDS} calculator rounds without finishing.")
 
 
@@ -217,9 +222,10 @@ def _floats(text: str) -> List[Tuple[str, float]]:
     return out
 
 
-def _close(a: float, b: float) -> bool:
-    return a == b or abs(a - b) <= REL * max(abs(a), abs(b)) or abs(a * 100 - b) <= REL * abs(b) or \
-        abs(a - b * 100) <= REL * abs(a)                     # 11.72% is 0.1172
+def _close(a: float, b: float, percent: bool = False) -> bool:
+    """Equal to REL; with `percent` (the answer is written with a %), 11.72 also equals 0.1172."""
+    return a == b or abs(a - b) <= REL * max(abs(a), abs(b)) or (
+        percent and (abs(a * 100 - b) <= REL * abs(b) or abs(a - b * 100) <= REL * abs(a)))
 
 
 def result_numbers(markdown: str, problem: str) -> List[Tuple[str, float]]:
@@ -231,7 +237,8 @@ def result_numbers(markdown: str, problem: str) -> List[Tuple[str, float]]:
 def unchecked(markdown: str, problem: str, log: List[dict]) -> List[str]:
     """The answer's numbers that no calculate result gives."""
     known = [v for entry in log for _, v in _floats(entry["result"]) if not entry["result"].startswith("error")]
-    return [t for t, v in result_numbers(markdown, problem) if not any(_close(v, k) for k in known)]
+    percent = "%" in answer_text(markdown)
+    return [t for t, v in result_numbers(markdown, problem) if not any(_close(v, k, percent) for k in known)]
 
 
 def agree(a: str, b: str, problem: str) -> Optional[bool]:
@@ -239,7 +246,9 @@ def agree(a: str, b: str, problem: str) -> Optional[bool]:
     xs, ys = [v for _, v in result_numbers(a, problem)], [v for _, v in result_numbers(b, problem)]
     if not xs or not ys:
         return None
-    return all(any(_close(x, y) for y in ys) for x in xs) and all(any(_close(y, x) for x in xs) for y in ys)
+    percent = "%" in answer_text(a) + answer_text(b)
+    return all(any(_close(x, y, percent) for y in ys) for x in xs) and all(any(_close(y, x, percent) for x in xs)
+                                                                           for y in ys)
 
 
 def _replace_answer(markdown: str, line: str) -> str:
@@ -257,7 +266,9 @@ def missing_parts(markdown: str, problem: str) -> List[str]:
     """The parts the problem asks for, (a), (b) ..., that the **Answer:** line doesn't mention."""
     asked = sorted(set(_PART.findall(problem)))
     answer = answer_text(markdown)
-    return [f"({p})" for p in asked if f"({p})" not in answer] if len(asked) > 1 else []
+    # "(a) 0.5", "a) 0.5", "a. 0.5" and "part a" all name part a
+    named = lambda p: re.search(rf"(?<![A-Za-z0-9])(?:\({p}\)|{p}[).:])|\bpart {p}\b", answer, re.I)   # noqa: E731
+    return [f"({p})" for p in asked if not named(p)] if len(asked) > 1 else []
 
 
 def _follow_up(markdown: str, problem: str, log: List[dict]) -> str:
@@ -274,16 +285,21 @@ def _follow_up(markdown: str, problem: str, log: List[dict]) -> str:
 
 
 def solve(backend, problem: str, image=None, cancelled: Callable[[], bool] = lambda: False,
-          context: str = "", system: str = SYSTEM) -> Solution:
+          context: str = "", system: str = SYSTEM, example: str = "",
+          progress: Optional[Callable[[int], None]] = None) -> Solution:
     """Work `problem` (Markdown) out with `backend`; every number from the calculator, checked once.
-    `context` is reference text the problem relies on (the exercises it mentions)."""
+    `context` is reference text the problem relies on (the exercises it mentions); `example` a solved problem of
+    the book that is close to this one (its method may be followed, its numbers are not this problem's)."""
     start = time.perf_counter()
     prompt = f"Solve this statistics problem.\n\n{problem}"
     if context:
         prompt += f"\n\nThe problem refers to other exercises; this is what they say:\n\n{context}"
+    if example:
+        prompt += ("\n\nA similar problem from the same book, already solved. Follow its METHOD if it fits; its numbers "
+                   f"are not this problem's, so take every number from calculate:\n\n{example}")
     backend.begin(system, prompt, image)
     texts, log = [], []
-    _rounds(backend, texts, log, cancelled)
+    _rounds(backend, texts, log, cancelled, progress)
     markdown = "\n\n".join(texts).strip()
     if not markdown:
         raise SolverError("The solver wrote nothing.")
@@ -292,7 +308,7 @@ def solve(backend, problem: str, image=None, cancelled: Callable[[], bool] = lam
     if ask:
         backend.say(ask)
         more = []
-        _rounds(backend, more, log, cancelled)
+        _rounds(backend, more, log, cancelled, progress)
         line = answer_text("\n\n".join(more))
         if line:
             markdown = _replace_answer(markdown, line)

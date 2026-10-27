@@ -577,6 +577,19 @@ Notebook opens, so the first picture doesn't wait for it. A problem that is not 
 Gemini key, whichever solver finishes first is used and the other gets only 30 s (Gemini) or 90 s (local) to
 cross-check, instead of waiting minutes for the local model. A stored answer is shown in about a second.
 
+**More than one problem in a picture.** The Notebook lists them with a **Solve** button each (for example 4.9, 4.10 and
+4.11) and solves the one you pick. When Tesseract can split the picture's numbered problems and every one is in the
+library, the list appears without the vision model reading anything.
+
+**Remembered answers.** A problem solved live is remembered and shown again at once, but only after two solvers agreed
+or the background re-check agreed (`answers.json` next to the settings; a Correction removes it). The same picture
+is also remembered with its problems. The status line counts the calculations while a problem is solved. A problem
+that is close to a library one (a number changed) is solved with the book's worked solution as an example of the
+method. Each answer has **Check again**: it forgets the remembered answer and solves the problem again, then says
+whether it got the same. The second reading of a blurred picture is sharpened first. The calculator also knows
+`det`, `inv`, `matmul`, `transpose`, `ols` (least squares, exact), `corr` and `integrate('3*x**-4', 1, inf)`.
+Formulas are drawn in the background while an answer streams in and are remembered for the next time.
+
 **Re-checked in the background.** A stored answer is shown as it is (it was worked and checked when the library was
 written). An answer that came from one solver alone, or from a library problem whose numbers differed from the
 stored one, is solved again afterwards, independently, on the other solver (Gemini when you added a key and it isn't

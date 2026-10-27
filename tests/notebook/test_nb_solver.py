@@ -225,3 +225,17 @@ def test_tiny_results_exponents_and_subscripts_are_not_unchecked_numbers():
     log[0]["result"] = "2.9e-06"
     assert solver.unchecked(answer, "", log) == ["2.56e-06"]
     assert solver.agree(answer, answer.replace("t_{14}", "t"), "") is True
+
+
+def test_a_hundred_times_the_number_agrees_only_when_the_answer_is_a_percentage():
+    assert solver._close(0.1172, 11.72, percent=True) and not solver._close(0.1172, 11.72)
+    a, b = "**Answer:** 11.72%", "**Answer:** 0.1172"
+    assert solver.agree(a, b, "") is True
+    assert solver.agree("**Answer:** 0.5", "**Answer:** 50", "") is False       # no %: a hundred-fold mistake
+
+
+def test_a_part_is_answered_however_it_is_written():
+    problem = "(a) Find the mean. (b) Find the variance."
+    for answer in ("**Answer:** (a) 3, (b) 4", "**Answer:** a) 3  b) 4", "**Answer:** part a is 3; part b is 4"):
+        assert solver.missing_parts(answer, problem) == []
+    assert solver.missing_parts("**Answer:** (a) 3", problem) == ["(b)"]

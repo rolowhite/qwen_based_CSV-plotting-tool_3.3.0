@@ -104,6 +104,15 @@ def parse(raw: str) -> Reading:
     return Reading(problems, unreadable, raw)
 
 
+def enhance(image):
+    """The picture with its contrast stretched and its edges sharpened: a blurred digit is why the first reading
+    missed, and the second one is worth this much (Pillow only, a few milliseconds)."""
+    from PIL import ImageFilter, ImageOps
+
+    image = ImageOps.autocontrast(image.convert("RGB"), cutoff=1)
+    return image.filter(ImageFilter.UnsharpMask(radius=2, percent=160, threshold=3))
+
+
 def read(chat: "ollama.Chat", model: str, image, hint: str = "", think: Optional[bool] = None,
          long_side: Optional[int] = None) -> Reading:
     """Read a PIL image. `hint` is a PDF text layer; `long_side` sends the picture at that size instead."""
@@ -146,6 +155,19 @@ def clean_text(text: str) -> str:
     and a word cut by a hyphen at a line's end (the cut is kept as a space when the next line starts a new word)."""
     text = (text or "").replace("\ufffd", "").replace("\u00ad", "").replace("\r\n", "\n").replace("\r", "\n")
     return re.sub(r"[ \t]*\n[ \t]*", "\n", text).strip()
+
+
+_LABELLED = re.compile(r"^[ \t]*(?:Exercise\s+)?(\d{1,2}\.\d{1,3})(?=\s)", re.M)
+
+
+def split_labelled(text: str) -> List["Problem"]:
+    """A text with several problems that start with their exercise numbers on lines of their own (4.9 ... 4.10 ...)
+    as one Problem each; [] unless there are two or more different numbers."""
+    marks = list(_LABELLED.finditer(text))
+    if len(marks) < 2 or len({m.group(1) for m in marks}) != len(marks):
+        return []
+    ends = [m.start() for m in marks[1:]] + [len(text)]
+    return [Problem(m.group(1), text[m.end():end].strip()) for m, end in zip(marks, ends)]
 
 
 def text_layer(doc, index: int, box: Optional[Box] = None, view=None) -> str:

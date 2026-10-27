@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import io
 import re
+import threading
+from collections import OrderedDict
 
 # command -> replacement; matched only as a whole command (\le, not \left)
 REWRITES = {
@@ -211,3 +213,29 @@ def png(tex: str, size: float = 11.0, dpi: float = 96.0, color: str = "#000000")
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     return buf.getvalue()
+
+
+# matplotlib is not thread-safe, and the same formulas come back (a stored solution, a second look): one lock and one
+# memory of the pictures, so a background thread can draw an answer's formulas while it streams in
+_LOCK = threading.RLock()
+_PNGS: "OrderedDict[tuple, object]" = OrderedDict()
+MAX_PNGS = 2000
+
+
+def png_cached(tex: str, size: float = 11.0, dpi: float = 96.0, color: str = "#000000") -> bytes:
+    """png(), remembered (and drawn under a lock, so any thread may call it). A formula that can't be drawn raises
+    TexError every time without trying again."""
+    key = (tex, size, round(dpi, 3), color)
+    with _LOCK:
+        if key not in _PNGS:
+            try:
+                _PNGS[key] = png(tex, size, dpi, color)
+            except TexError as exc:
+                _PNGS[key] = exc
+            while len(_PNGS) > MAX_PNGS:
+                _PNGS.popitem(last=False)
+        _PNGS.move_to_end(key)
+        found = _PNGS[key]
+    if isinstance(found, TexError):
+        raise found
+    return found

@@ -15,6 +15,7 @@ pytestmark = pytest.mark.gui
 MARBLES = ("A box holds 7 red and 5 blue marbles. Two marbles are drawn without replacement. "
            "Find the probability that both are red.")
 VISION = {"vl": ["completion", "vision"]}
+MODELS_VT = {"vl": ["completion", "vision", "tools"]}
 
 
 def _reply(*problems):
@@ -285,4 +286,41 @@ def test_a_wrong_fast_answer_is_corrected_later_without_blocking_the_next_proble
         _wait(app, lambda: "Correction for the problem" in nb.answers.plain_text(), 30)
     text = nb.answers.plain_text()
     assert "sorry" in text and "0.1171875" in text and nb._checks == [] and nb._checker is None
+    assert not app.errors
+
+
+def _buttons(widget):
+    out = []
+    for child in widget.winfo_children():
+        out += [child] if child.winfo_class() == "TButton" else _buttons(child)
+    return out
+
+
+def test_a_picture_with_several_problems_offers_a_button_for_each_and_solves_the_chosen_one(app):
+    coin = "A fair coin is tossed 10 times. Find the probability of exactly 3 heads."
+    reply = _reply(("1.1", MARBLES), ("", coin))
+    with FakeOllama(MODELS_VT, replies=[reply, reply]) as fake:
+        nb = _ready(app, fake.url)
+        nb.submit(nb_session().Source("Screenshot", _picture()), _picture())
+        _wait(app, lambda: nb._turn is None)
+        card = nb.answers._windows[-1]
+        buttons = {b.cget("text"): b for b in _buttons(card)}
+        assert list(buttons) == ["Solve 1.1", "Solve #2"] and "Solution." not in nb.answers.plain_text()
+        buttons["Solve 1.1"].invoke()                          # the stored one: answered at once, nothing is read again
+        _wait(app, lambda: nb._turn is None and "Solution." in nb.answers.plain_text())
+        assert len(fake.requests) == 2                         # the two readings of the picture, nothing else
+    assert "Problem 1.1." in nb.answers.plain_text() and not app.errors
+
+
+def test_check_again_solves_it_again_and_says_so(app):
+    coin = "A fair coin is tossed 10 times. Find the probability of exactly 3 heads."
+    right = [{"text": "**Given:** n=10.", "calls": ["comb(10, 3) / 2**10"]}, "**Answer:** 0.1171875"]
+    with FakeOllama({"vl": ["completion", "vision", "tools"]}, replies=right * 3) as fake:
+        nb = _ready(app, fake.url)
+        nb.submit(nb_session().Source("Typed", text=coin))
+        _wait(app, lambda: nb._turn is None and nb._checker is None and not nb._checks and len(fake.requests) >= 4)
+        answer = next(md for md in nb._rechecks)
+        assert nb.can_recheck(answer) and nb.cache.answer(coin)         # the background re-check agreed: remembered
+        nb.recheck(answer)
+        _wait(app, lambda: "Checked again: I get the same answer." in nb.answers.plain_text(), 30)
     assert not app.errors

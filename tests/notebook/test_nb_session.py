@@ -94,12 +94,30 @@ def test_a_problem_not_in_the_solutions_is_solved_and_says_what_couldnt_be_read(
     assert entry["solutions"][0]["tool_log"] == [{"expression": "comb(10, 3) / 2**10", "result": "15/128 ≈ 0.1171875"}]
 
 
-def test_every_problem_in_a_picture_gets_its_own_answer(index):
+def test_a_picture_with_several_problems_asks_which_one_to_solve(index):
     reply = _reply(("1.1", MARBLES), ("", COIN))
-    with FakeOllama(MODELS, replies=[reply, reply] + QWEN_SOLVES) as fake:
+    with FakeOllama(MODELS, replies=[reply, reply]) as fake:
         answers, events = _run(session.Turn(session.Source("p.png", _picture()), index, fake.url, pace=0))
-    assert len(answers) == 2 and [e[0] for e in events].count("start") == 2
-    assert r"\mathbf{0.3182}" in answers[0] and "**Answer:** $0.1171875$" in answers[1]
+    assert answers == [] and not [e for e in events if e[0] == "start"]
+    assert [e[1] for e in events if e[0] == "choose"] == [[("1.1", MARBLES), ("", COIN)]]
+    # the chosen one goes in as typed text with its number: no second reading, and the stored answer
+    chosen = session.Turn(session.Source("Problem 1.1", text=MARBLES, label="1.1"), index, "http://127.0.0.1:9", pace=0)
+    answers, _ = _run(chosen)
+    assert answers[0].startswith("**Problem 1.1.**") and r"\mathbf{0.3182}" in answers[0]
+
+
+def test_numbered_problems_in_the_quick_text_are_offered_without_the_vision_model(index, monkeypatch):
+    marbles = MARBLES.replace("$", "")
+    monkeypatch.setattr(session.reader, "ocr_text", lambda image: f"1.1 {marbles}\n1.2 {marbles}")
+    with FakeOllama(MODELS, replies=[]) as fake:
+        _, events = _run(session.Turn(session.Source("p.png", _picture()), index, fake.url, pace=0))
+        assert fake.requests == []                                          # every part is a library problem
+    assert [e[1] for e in events if e[0] == "choose"] == [[("1.1", marbles), ("1.2", marbles)]]
+    # one part that is not in the library: the vision model reads the picture as usual
+    monkeypatch.setattr(session.reader, "ocr_text", lambda image: f"1.1 {marbles}\n1.2 {COIN}")
+    with FakeOllama(MODELS, replies=[_reply(("1.1", MARBLES), ("1.2", COIN))] * 2) as fake:
+        _run(session.Turn(session.Source("p.png", _picture()), index, fake.url, pace=0))
+        assert len(fake.requests) >= 1
 
 
 def _gemini_turn(index, ollama_url, gem_url, log=None, text=COIN):
@@ -284,3 +302,38 @@ def test_stop_ends_the_stream_and_is_logged(index, tmp_path):
         turn.run(emit)
     assert sum(e[0] == "text" for e in seen) < 8
     assert json.loads(log.read_text(encoding="utf-8"))["stopped"] is True
+
+
+def test_a_verified_answer_is_shown_from_memory_and_an_unverified_one_is_solved_again(index, tmp_path):
+    from plotstudio.core.notebook import cache
+    memory = cache.Cache(tmp_path / "answers.json")
+    memory.remember(COIN, "**Given:** n=10.\n\n**Answer:** 15/128", "qwen", verified=True)
+    with FakeOllama(MODELS, replies=[]) as fake:
+        turn = session.Turn(session.Source("typed", text=COIN), index, fake.url, pace=0, cache=memory)
+        answers, _ = _run(turn)
+        assert fake.requests == []                                       # nothing was solved
+    assert "15/128" in answers[0] and turn.answers[0]["from"] == "cache" and turn.pending == []
+    memory.drop(COIN)
+    with FakeOllama(MODELS, replies=QWEN_SOLVES) as fake:
+        turn = session.Turn(session.Source("typed", text=COIN), index, fake.url, pace=0, cache=memory)
+        _run(turn)
+    assert memory.answers[cache.key(COIN)]["verified"] is False and len(turn.pending) == 1   # waits for its re-check
+
+
+def test_the_status_counts_the_calculations_while_solving(index):
+    with FakeOllama(MODELS, replies=QWEN_SOLVES) as fake:
+        _, events = _run(session.Turn(session.Source("typed", text=COIN), index, fake.url, pace=0))
+    assert "Solving… 1 calculations so far" in [e[1] for e in events if e[0] == "status"]
+
+
+def test_a_close_variant_of_a_library_problem_gives_the_solver_its_worked_solution(index):
+    variant = MARBLES.replace("7 red", "8 red")                          # same words, a number changed: not a match
+    with FakeOllama(MODELS, replies=QWEN_SOLVES) as fake:
+        turn = session.Turn(session.Source("typed", text=variant), index, fake.url, pace=0)
+        _run(turn)
+        prompt = fake.requests[0]["messages"][1]["content"]
+    assert "A similar problem from the same book" in prompt and "0.3182" in prompt
+    assert turn.answers[0]["example"] == "sample:1.1"
+    with FakeOllama(MODELS, replies=QWEN_SOLVES) as fake:                 # matching off (the eval): no example
+        _run(session.Turn(session.Source("typed", text=variant), index, fake.url, pace=0, match=False))
+        assert "similar problem" not in fake.requests[0]["messages"][1]["content"]

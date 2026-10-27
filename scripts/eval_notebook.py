@@ -1,6 +1,6 @@
 """Measure the Notebook's reading and matching on its solution library (the library is the answer key).
 
-    python scripts/eval_notebook.py --n 60          (the app's built-in Walpole solutions; --library for others)
+    python scripts/eval_notebook.py --n 60          (the app's built-in solutions, Walpole and Lind; --library for others)
     python scripts/eval_notebook.py --live --n 20   (solving: qwen, and Gemini with the key from the settings)
 
 For a sample of exercises that have a **Problem:** block and a ✔ checker line, each problem is drawn as a
@@ -219,7 +219,7 @@ def live(args):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--library", default=os.environ.get("NOTEBOOK_LIBRARY") or str(library.BUILT_IN))
+    ap.add_argument("--library", default=os.environ.get("NOTEBOOK_LIBRARY") or str(library.BUILT_IN.parent))
     ap.add_argument("--n", type=int, default=60)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--url", default=ollama.DEFAULT_URL)

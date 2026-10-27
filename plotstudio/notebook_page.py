@@ -21,9 +21,10 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from . import APP_NAME, settings
+from .core.notebook import cache as nb_cache
 from .core.notebook import library as nb_library
 from .core.notebook import lookup as nb_lookup
-from .core.notebook import gemini, ollama, reader, render, session, solver, tex
+from .core.notebook import gemini, ollama, reader, render, session, solver, tex, verify
 from .core.notebook import setup as reader_setup
 from .log import log_error
 from .theme import C
@@ -83,6 +84,7 @@ class AnswerView(tk.Frame):
             log_error("Notebook: answers are shown as plain text", exc)
             self._md = None
         self.items = []
+        self._dpi = self.text.winfo_fpixels("1i")     # read here: Tk is only touched on its own thread
         self._images = {}          # (tex, display, ink) -> PhotoImage
         self._failed = set()       # formulas mathtext couldn't draw (logged once each)
         self._windows = []         # embedded buttons and cards, destroyed on a redraw
@@ -119,6 +121,33 @@ class AnswerView(tk.Frame):
         """End the answer being streamed with what has arrived (after Stop)."""
         if self._live is not None:
             self.end(self._live[1])
+
+    def prerender(self, markdown):
+        """Draw an answer's formulas in a background thread, so they are ready when the answer streams in (and stay
+        remembered for the next time). Called from the solving thread; never touches Tk."""
+        size, dpi, color = self.font["base"][1], self._dpi, C["text"]
+
+        def work():
+            try:
+                forms = []
+                for tok in render._markdown().parse(markdown):
+                    if tok.type == "math_block":
+                        forms.append((tok.content, True))
+                    forms += [(c.content, c.type == "math_inline_double") for c in tok.children or []
+                              if c.type in ("math_inline", "math_inline_double")]
+                for source, display in forms:
+                    try:
+                        tex.png_cached(source, size * (1.15 if display else 1.0), dpi, color)
+                    except tex.TexError:
+                        pass
+            except Exception:  # noqa: BLE001 - a head start only: the page draws what is missing itself
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def add_choice(self, options, on_pick):
+        """A picture had several problems: one button for each, the user says which to solve."""
+        self._live = None
+        self._add(("choice", list(options), on_pick))
 
     def add_correction(self, markdown):
         """An answer that arrives later (the background re-check found a mistake), as a finished answer."""
@@ -221,6 +250,8 @@ class AnswerView(tk.Frame):
                 self._actions(item[1])
         elif kind == "setup":
             self._setup_card(item[1])
+        elif kind == "choice":
+            self._choice_card(item[1], item[2])
         else:
             self._insert(item[1] + "\n", (item[2], "p"))
 
@@ -310,7 +341,7 @@ class AnswerView(tk.Frame):
         if key not in self._images:
             size = self.font["base"][1] * (1.15 if display else 1.0)
             try:
-                data = tex.png(source, size, self.text.winfo_fpixels("1i"), C["text"])
+                data = tex.png_cached(source, size, self._dpi, C["text"])
                 self._images[key] = tk.PhotoImage(master=self.text, data=base64.b64encode(data))
             except tex.TexError as exc:
                 if source not in self._failed:
@@ -393,6 +424,9 @@ class AnswerView(tk.Frame):
         ttk.Button(row, text="Open in browser", image=t.icon("external", "muted", 14), compound="left",
                    style="Ghost.TButton", command=lambda: self.page.open_in_browser(md)).pack(side="left",
                                                                                          padx=(px(4), 0))
+        if self.page.can_recheck(md):
+            ttk.Button(row, text="Check again", style="Ghost.TButton",
+                       command=lambda: self.page.recheck(md)).pack(side="left", padx=(px(4), 0))
         self._windows.append(row)
         self.text.window_create("end-1c", window=row)
         self._insert("\n", ("p",))
@@ -401,6 +435,23 @@ class AnswerView(tk.Frame):
         self.clipboard_clear()
         self.clipboard_append(md)
         self.page.set_status("Copied the answer (Markdown with LaTeX).")
+
+    def _choice_card(self, options, on_pick):
+        px = self.px
+        card = ttk.Frame(self.text, style="Well.TFrame", padding=(px(16), px(12)))
+        ttk.Label(card, text=f"I found {len(options)} problems in this picture. Which one should I solve?",
+                  style="Raised.Bold.TLabel", wraplength=px(440), justify="left").pack(anchor="w")
+        for n, (label, markdown) in enumerate(options, 1):
+            row = ttk.Frame(card, style="Well.TFrame")
+            row.pack(fill="x", pady=(px(8), 0))
+            ttk.Button(row, text=f"Solve {label}" if label else f"Solve #{n}", style="Small.TButton",
+                       command=lambda lb=label, md=markdown: on_pick(lb, md)).pack(side="left", anchor="n")
+            preview = " ".join(markdown.split())
+            ttk.Label(row, text=preview[:140] + ("…" if len(preview) > 140 else ""), style="Raised.Muted.TLabel",
+                      wraplength=px(330), justify="left").pack(side="left", padx=(px(10), 0))
+        self._windows.append(card)
+        self.text.window_create("end-1c", window=card)
+        self._insert("\n", ("p",))
 
     def _setup_card(self, message):
         t, px = self.t, self.px
@@ -445,6 +496,9 @@ class NotebookPage(ttk.Frame):
         g = px(GUTTER)
         self.library = None
         self._warmed = set()
+        self.cache = nb_cache.Cache(notebook_dir() / "answers.json")      # verified answers and readings
+        self._rechecks = {}        # answer Markdown -> the verify.Pending that can check it again
+        self._manual = set()       # ids of the Pending the user asked to check again (they get a reply either way)
         self._checks = []          # answers waiting for their background re-check
         self._checker = None       # the Checker running now, and the answer it is re-checking
         self._checking = None
@@ -1002,7 +1056,8 @@ class NotebookPage(ttk.Frame):
         cfg = self.app.cfg
         self._turn = session.Turn(source, self.index, self._url(), self.model_var.get(), history_path(),
                                   gemini_key=cfg.get("notebook_gemini_key") or "",
-                                  gemini_model=cfg.get("notebook_gemini_model") or "", gemini_base=self._gemini_url())
+                                  gemini_model=cfg.get("notebook_gemini_model") or "", gemini_base=self._gemini_url(),
+                                  cache=self.cache, prerender=self.answers.prerender)
         self._run("turn", self._turn.run, self._turn_done, on_event=self._turn_event)
         return True
 
@@ -1015,7 +1070,39 @@ class NotebookPage(ttk.Frame):
         elif kind == "text":
             self.answers.feed(value)
         elif kind == "end":
+            self._remember_answer()
             self.answers.end(value)
+        elif kind == "choose":
+            self.answers.add_choice(value, self._pick)
+
+    def _pick(self, label, markdown):
+        """The user chose one of a picture's problems: it is solved as typed text (no second reading)."""
+        self.submit(session.Source(f"Problem {label}" if label else "Problem", text=markdown, label=label))
+
+    def _remember_answer(self):
+        """The answer just finished can be checked again (the Check again button): keep what that needs."""
+        turn = self._turn
+        if turn is None or not turn.answers or "solution" not in turn.answers[-1]:
+            return
+        a = turn.answers[-1]
+        self._rechecks[a["answer"]] = verify.Pending(a.get("label", ""), a["problem"], a["solution"],
+                                                     a.get("by", "qwen"), turn.source.image, turn._context(a["problem"]))
+
+    def can_recheck(self, markdown):
+        return markdown in self._rechecks
+
+    def recheck(self, markdown):
+        """Check again: forget the remembered answer, and solve it again independently, now (or when this ends)."""
+        pending = self._rechecks.get(markdown)
+        if pending is None:
+            return
+        self.cache.drop(pending.problem)
+        self._manual.add(id(pending))
+        self._checks.insert(0, pending)
+        if self._turn is None and self._checker is None:
+            self._check_next()
+        else:
+            self.set_status("I'll check it again as soon as this is finished.")
 
     def _turn_done(self, _answers, error):
         turn, self._turn = self._turn, None
@@ -1055,12 +1142,23 @@ class NotebookPage(ttk.Frame):
         self._run("verify", lambda: checker.check(pending), self._checked)
 
     def _checked(self, verdict, error):
-        self._checker, self._checking = None, None
+        pending, self._checker, self._checking = self._checking, None, None
+        asked = pending is not None and id(pending) in self._manual
+        self._manual.discard(id(pending))
         if error is not None:
             if not isinstance(error, (ollama.Cancelled, gemini.Cancelled)):
                 log_error("Notebook: the background re-check failed", error)      # nothing to tell the user
+                if asked:
+                    self.answers.note(f"I couldn't check it again: {error}", "error")
         elif verdict.correction:
+            self.cache.drop(pending.problem)
             self.answers.add_correction(verdict.correction)
+        else:
+            if verdict.agrees:
+                self.cache.verify(pending.problem)          # now it may be shown again straight away
+            if asked:
+                self.answers.note("Checked again: I get the same answer." if verdict.agrees else
+                                  "I checked it again, but the two answers have no final numbers to compare.")
         if self._turn is None:
             self.set_status("A correction was added below." if error is None and verdict.correction else "")
         self._check_next()
