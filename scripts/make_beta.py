@@ -19,7 +19,8 @@ FILES = ["main.py", "plot_recommender.py", "requirements.txt", "requirements-imp
 FOLDERS = ["plotstudio", "samples"]
 SKIP = {"__pycache__", ".pytest_cache", ".mypy_cache"}
 NEEDED = ["main.py", "run_windows.bat", "plotstudio/app.py", "plotstudio/notebook_page.py",
-          "plotstudio/assets/notebook/Walpole_All_Chapters_Solutions.md", "plotstudio/assets/katex/katex.min.js",
+          "plotstudio/assets/notebook/Walpole_All_Chapters_Solutions.md",
+          "plotstudio/assets/notebook/Lind_Chapters_8_to_12_Solutions.md", "plotstudio/assets/katex/katex.min.js",
           "READ ME FIRST.txt"]
 
 READ_ME = f"""CSV Plot Studio {__version__} (beta)
