@@ -1,4 +1,6 @@
-# Optional: the Notebook's solution pages (Markdown + LaTeX shown in the browser with the bundled KaTeX).
-# Without these the Notebook still finds exercises; "Open solution" says what to install.
-markdown-it-py>=3.0         # Markdown -> HTML (3.x supports Python 3.8+)
-mdit-py-plugins>=0.4        # $...$ and $$...$$ kept as TeX for KaTeX
+# Optional: the Notebook draws answers from Markdown + LaTeX (mathtext in the app, the bundled KaTeX in the browser).
+# Without these the answers are shown as plain text.
+markdown-it-py>=3.0         # Markdown -> tokens / HTML (3.x supports Python 3.8+)
+mdit-py-plugins>=0.4        # $...$ and $$...$$ kept as TeX
+# Reading pictures needs Ollama (https://ollama.com) and a vision model, e.g. `ollama pull qwen3-vl:8b`: a program,
+# not a pip package. matplotlib (mathtext) comes with requirements.txt.

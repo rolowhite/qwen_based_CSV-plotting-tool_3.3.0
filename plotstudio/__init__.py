@@ -5,4 +5,4 @@ is shown in the app so it can be copied into a notebook.
 """
 
 APP_NAME = "CSV Plot Studio"
-__version__ = "3.3.0"
+__version__ = "3.4.0"

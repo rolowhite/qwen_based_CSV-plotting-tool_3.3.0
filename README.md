@@ -8,6 +8,10 @@ and then **shows you the code** so you can paste it into Jupyter or a Kaggle not
 3. Choose the columns and rows (the app pre-fills sensible suggestions)
 4. Press **Plot**. Zoom, pan, save as PNG/SVG/PDF, open in its own window, or copy the code
 
+New in 3.4.0: the **Notebook** works like a chat. Paste a photo or screenshot of a statistics problem on the left,
+and the worked solution streams in on the right with its math drawn. It reads the picture with a local vision model
+(Ollama, offline) and never asks you to fix the reading. See [Notebook](#notebook-a-photo-of-a-problem-in-a-worked-solution-out).
+
 New in 3.3.0: tables from PDFs and images are read correctly and never changed behind your back (both tables on
 a page, merged headings, rotated pages, password-protected files, borderless screenshots, phone photos); every
 import opens in one review dialog where you can fix any cell, and is saved as a CSV where you choose with a small
@@ -502,28 +506,44 @@ program for screenshots and scans (Windows: `winget install UB-Mannheim.Tesserac
 tesseract-ocr`). The starters install the Python packages into the app's own environment; they never install
 system programs.
 
-### Notebook: find a problem in your own solutions
+### Notebook: a photo of a problem in, a worked solution out
 
-Click **Notebook** on the gallery. Use **Library ▾ › Add a solutions folder…** (or a single `.md` file) to point it
-at your worked solutions. It reads Markdown files with front matter (`book:`, `edition:`), `### Exercise N.M`
-headings, `**Problem:**` blocks and `✔ *Checker: …*` lines. The files are only read, never changed, and they stay
-on your computer.
+Click **Notebook** on the gallery. It works like a chat:
+* **Left (your problem):** open a picture or PDF, paste a screenshot (**Ctrl+V**), or type the problem and press
+  **Enter**. Each one becomes a bubble. On a PDF, pick the page and optionally drag around one problem, then
+  **Solve**.
+* **Right (the solution):** the problem is restated with its math drawn, then the worked solution streams in.
+  **Copy** gives the Markdown with LaTeX. **Open in browser** shows it with the bundled KaTeX 0.19.1 (MIT
+  licence, in `plotstudio/assets/katex`, no internet needed). **Stop** ends an answer, and **New chat** clears both
+  sides.
 
-Open a picture or PDF of a problem, paste a screenshot, or type the problem. The text that was read appears in an
-editable box with its numbers highlighted: fix any misreads, then **Find in library** (**Ctrl+Enter**). On a PDF,
-pick the page and drag around one problem. The Notebook compares the words, the numbers and a leading exercise
-number such as "3.31":
-* **One clear winner:** it is shown, and the other two candidates stay in the list ("Not this one?").
-* **Close scores, or two problems that only share small numbers:** you pick, and it never guesses.
-* **A low best score:** you are told the problem is not in your library.
+You are never asked to check or fix what was read. Pictures are read by a local vision model running in **Ollama**
+on your own computer, so no cloud and no account are involved:
+1. Install Ollama from [ollama.com](https://ollama.com).
+2. Run `ollama pull qwen3-vl:8b` once (about 6 GB; it fits an 8 GB graphics card).
 
-**Open solution** shows the stored solution in your browser. The maths is drawn by the KaTeX 0.19.1 copy (MIT licence) in
-`plotstudio/assets/katex`, with no internet. "Exercise N.M" mentions are links, and every result carries its source
-and trust label: *verified ✔*, *checked, with a caution ⚠* or *no checker note*. **Wrong match** records the right
-exercise in `~/.csv_plot_studio/notebook/notebook_feedback.jsonl`, which is used to tune the matching.
+The model menu in the header lists the installed models that can read pictures (any model whose Ollama
+capabilities include `vision`). The Ollama address is `notebook_ollama_url` in the settings file (default
+`http://localhost:11434`). Typed problems work without Ollama.
 
-Needs `pip install -r requirements-notebook.txt` (markdown-it-py, Python 3.9+) for the solution pages. Reading
-pictures uses the same Tesseract as image import. Tesseract reads plain text, so check fractions and symbols in the
-box. Live solving of problems that are not in the library comes in a later version.
+**Answers in this version come from your own solution library.** Use **Library ▾ › Add a solutions folder…** (or a
+single `.md` file). It reads Markdown files with front matter (`book:`, `edition:`), `### Exercise N.M` headings,
+`**Problem:**` blocks and `✔ *Checker: …*` lines. The files are only read, never changed, and they stay on your
+computer.
+
+A stored solution is used only when all three of these hold:
+* the problem clearly matches one exercise,
+* that exercise has its own `**Problem:**` text,
+* both have exactly the same numbers (a textbook variant with one number changed is not given the stored answer).
+
+When a first reading doesn't match, the picture is read once more at another size. Any other problem gets *"I can't
+solve this one yet"*. Solving new problems with a local model and an exact calculator is the next version. Every
+turn (what was read and where the answer came from) is logged in
+`~/.csv_plot_studio/notebook/notebook_history.jsonl`.
+
+Formulas are drawn with matplotlib's mathtext, after a small rewrite for what mathtext lacks: `\le`, `\tfrac`,
+`\frac12`, `\boxed` and the like. `cases` and matrices are laid out cell by cell. A formula it still can't draw is
+shown as its TeX source. Install the Notebook's packages with `pip install -r requirements-notebook.txt`
+(markdown-it-py, Python 3.9+).
 
 
