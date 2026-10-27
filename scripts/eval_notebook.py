@@ -55,7 +55,9 @@ def draw(browser: str, markdown: str, path: Path):
         page = Path(tmp) / "p.html"
         page.write_text(html, encoding="utf-8")
         shot = Path(tmp) / "shot.png"
-        subprocess.run([browser, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--window-size=900,1600",
+        # its own profile, so a running Edge (or a stuck earlier run) can't block this one
+        subprocess.run([browser, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run",
+                        "--disable-extensions", f"--user-data-dir={Path(tmp) / 'profile'}", "--window-size=900,1600",
                         f"--screenshot={shot}", "--virtual-time-budget=3000", page.as_uri()],
                        check=True, capture_output=True, timeout=60)
         image = Image.open(shot).convert("RGB")
@@ -130,9 +132,14 @@ def main(argv=None):
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     print(f"{len(sample)} of {len(pool)} exercises with a Problem block and a checker line; model {model} {caps}")
-    rows = []
+    rows, skipped = [], []
     for i, e in enumerate(sample, 1):
-        clean = draw(browser, problem_text(e), out / f"{e.number}-clean.png")
+        try:
+            clean = draw(browser, problem_text(e), out / f"{e.number}-clean.png")
+        except (subprocess.SubprocessError, OSError) as exc:     # the browser, not the Notebook: skip, say so
+            skipped.append({"exercise": e.key, "reason": f"{type(exc).__name__}: {exc}"[:300]})
+            print(f"{i:3}/{len(sample)} {e.number:>6} skipped: the browser couldn't draw it ({type(exc).__name__})")
+            continue
         photo = phone(clean, args.seed + i)
         photo.save(out / f"{e.number}-phone.jpg")
         for kind, image in (("clean", clean), ("phone", photo)):
@@ -142,7 +149,17 @@ def main(argv=None):
             print(f"{i:3}/{len(sample)} {e.number:>6} {kind:5} {mark:5} numbers {'ok' if row['numbers_right'] else '--'}"
                   f"  sim {row['similarity']:.2f}  reads {row['reads']}  {row['seconds']:5.1f}s"
                   + (f"  {row['error']}" if row["error"] else ""))
+        write_report(out, model, caps, args, sample, rows, skipped)       # after each one: a crash keeps the rest
+    summary = write_report(out, model, caps, args, sample, rows, skipped)
+    print("\n kind   pictures  numbers right  answered right  answered WRONG  errors  similarity  median s")
+    for kind, s in summary.items():
+        if s["pictures"]:
+            print(f" {kind:5}  {s['pictures']:8}  {s['numbers_right']:13.1%}  {s['answered_right']:14.1%}  "
+                  f"{s['answered_wrong']:14}  {s['errors']:6}  {s['mean_similarity']:10.2f}  {s['median_seconds']:8}")
+    print(f"\n{len(skipped)} skipped (browser). Wrote {out / 'eval_notebook.json'}")
 
+
+def write_report(out, model, caps, args, sample, rows, skipped) -> dict:
     def share(kind, key):
         part = [r for r in rows if r["kind"] == kind]
         return round(sum(bool(r[key]) for r in part) / len(part), 3) if part else None
@@ -156,14 +173,10 @@ def main(argv=None):
                       "median_seconds": sorted(r["seconds"] for r in rows if r["kind"] == kind)[
                           sum(r["kind"] == kind for r in rows) // 2] if rows else None}
                for kind in ("clean", "phone")}
-    print("\n kind   pictures  numbers right  answered right  answered WRONG  errors  similarity  median s")
-    for kind, s in summary.items():
-        print(f" {kind:5}  {s['pictures']:8}  {s['numbers_right']:13.1%}  {s['answered_right']:14.1%}  "
-              f"{s['answered_wrong']:14}  {s['errors']:6}  {s['mean_similarity']:10.2f}  {s['median_seconds']:8}")
     report = {"model": model, "capabilities": list(caps), "library": str(args.library), "n": len(sample),
-              "seed": args.seed, "summary": summary, "rows": rows}
+              "seed": args.seed, "summary": summary, "skipped": skipped, "rows": rows}
     (out / "eval_notebook.json").write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"\nWrote {out / 'eval_notebook.json'}")
+    return summary
 
 
 if __name__ == "__main__":

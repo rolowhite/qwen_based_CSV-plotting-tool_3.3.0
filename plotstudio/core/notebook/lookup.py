@@ -62,6 +62,7 @@ def numbers(text: str) -> List[str]:
     """Every number in the text, normalised. A fraction gives both forms: '1/4' -> ['1/4', '0.25'].
     A mention of another exercise gives 'ex3.49'."""
     text = _FRAC_TEX.sub(lambda m: f" {m.group(1) or m.group(2)}/{m.group(3) or m.group(4)} ", text)
+    text = _TEX_CMD.sub(" ", text)      # "\le1" and "\le 1" are the same 1 (a letter before a digit hides it)
     # "the data of Exercise 3.49" is not a value of this problem, but it tells 3.54 from 3.55: keep it as "ex3.49"
     out = [f"ex{int(a)}.{int(b)}" for m in _MENTION.finditer(text) for a, b in _REF.findall(m.group(0))]
     text = _MENTION.sub(" ", text)

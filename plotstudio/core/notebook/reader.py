@@ -36,6 +36,7 @@ SCHEMA = {
 
 PROMPT = """Copy the statistics problem(s) in this picture exactly. Do not solve them.
 - One entry per problem, in the order printed. "label": its number as printed (for example "3.13"), or "".
+  A problem with parts (a), (b), (c) ... is ONE problem: keep all its parts, each on its own line.
 - "markdown": the whole problem text without the label. Write math as LaTeX in $...$ (inline) or $$...$$
   (display) and tables as Markdown tables (with the |---| line). Copy every number, unit and table value exactly as printed:
   do not round, convert, simplify or correct anything. Include data shown in a figure.

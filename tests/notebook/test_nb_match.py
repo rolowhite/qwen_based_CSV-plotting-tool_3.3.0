@@ -36,7 +36,25 @@ def test_a_tie_is_not_a_hit(index):
     assert library_match.match(index, "The weights of six parcels are given in kg. Find the sample mean.") is None
 
 
+def test_the_same_words_with_other_numbers_are_told_apart_by_the_numbers(index):
+    first = "The weights of six parcels are 2.1, 3.4, 2.8, 3.0, 2.6 and 3.1 kg. Find the sample mean."
+    second = "The weights of six parcels are 4.1, 1.4, 5.8, 2.0, 6.6 and 0.1 kg. Find the sample mean."
+    assert library_match.match(index, first).number == "2.1"
+    assert library_match.match(index, second).number == "2.2"
+    assert library_match.match(index, second.replace("6.6", "6.7")) is None
+
+
+def test_few_words_but_numbers_no_other_exercise_has(index):
+    text = "Compute it: 4.1, 1.4, 5.8, 2.0, 6.6, 0.1."
+    assert lookup.LOW <= index.lookup(text).best.score < lookup.HIGH
+    assert library_match.match(index, text).number == "2.2"
+    assert library_match.match(index, "Compute it: 7, 5.") is None      # only 2 numbers: not enough
+
+
 def test_math_written_differently_keeps_the_same_numbers():
     assert library_match.problem_numbers(r"$\frac{7}{12}$ of 20,000") == \
         library_match.problem_numbers("7/12 of 20000")
     assert library_match.problem_numbers("3.13 The 3 values") == library_match.problem_numbers("The 3 values")
+    # the library writes \le1 and \pm0.0100, a model writes \le 1 and \pm 0.0100
+    assert library_match.problem_numbers(r"$0\le y\le1$, $2.4\pm0.0100$") == \
+        library_match.problem_numbers(r"$0 \le y \le 1$, $2.4 \pm 0.0100$")
