@@ -145,11 +145,22 @@ def test_a_retired_model_falls_through_to_the_next_free_one():
     assert gemini.pick(["x"], wanted="x") == "x" and gemini.pick(["x"]) is None
 
 
+@pytest.fixture(autouse=True)
+def _no_busy_memory():
+    solver.GeminiBackend.busy_until.clear()
+    yield
+    solver.GeminiBackend.busy_until.clear()
+
+
 def test_an_overloaded_model_falls_through_before_it_starts_and_is_retried_once_after(monkeypatch):
     monkeypatch.setattr(solver, "BUSY_WAIT", 0)
-    with FakeGemini(busy={"gemini-3.8-flash"}, replies=[fg.text("**Answer:** 0.1171875")]) as fake:
+    with FakeGemini(busy={"gemini-3.8-flash"}, replies=[fg.text("**Answer:** 0.1171875")] * 2) as fake:
         sol = solver.solve(_gem(fake), COIN + " It is 0.1171875.")
-    assert sol.model == "gemini-3.6-flash"
+        assert sol.model == "gemini-3.6-flash"
+        again = solver.solve(_gem(fake), COIN + " It is 0.1171875.")      # the busy one is skipped for a while
+        assert again.model == "gemini-3.6-flash"
+        assert sum("3.8-flash" in path for path, _, _ in fake.requests) == 1
+    solver.GeminiBackend.busy_until.clear()
     with FakeGemini(replies=[fg.call("comb(10, 3) / 2**10")]) as fake:     # starts, then its model gets busy
         backend = _gem(fake)
         backend.begin(solver.SYSTEM, COIN)

@@ -21,6 +21,7 @@ REL = 1e-3                  # numbers this close are the same answer (0.6496 vs 
 OLLAMA_OPTIONS = {"temperature": 0, "num_ctx": 8192, "num_predict": 4096}     # a regression's steps are long
 BUSY_WAIT = 3.0             # s before the one retry of an overloaded Gemini model in the middle of a solve
 MAX_WAIT = 60.0             # s at most for a per-minute limit before that retry
+BUSY_SKIP = 600.0           # s an overloaded Gemini model is skipped at the start of later solves
 
 SYSTEM = """You are a statistics tutor writing a worked solution on a board.
 - Start with **Given:** and the facts the problem gives (briefly).
@@ -112,9 +113,13 @@ class OllamaBackend:
 class GeminiBackend:
     """Google's Gemini (the user's own key). It gets the problem's text and, when there is one, the picture."""
 
+    busy_until: dict = {}           # model -> time.time() until which it is skipped (it just said it's overloaded)
+
     def __init__(self, client: Gemini, model: str, fallbacks=()):
-        self.client, self.model = client, model
-        self.fallbacks = [m for m in fallbacks if m != model]
+        order = [model] + [m for m in fallbacks if m != model]
+        ready = [m for m in order if GeminiBackend.busy_until.get(m, 0) < time.time()]
+        self.client, self.model = client, (ready or order)[0]
+        self.fallbacks = [m for m in (ready or order)[1:]]
         self.contents: list = []
         self.system: dict = {}
 
@@ -136,6 +141,8 @@ class GeminiBackend:
             except GeminiError as exc:
                 started = any(c.get("role") == "model" for c in self.contents)
                 if exc.kind in ("model", "busy", "rate", "quota") and self.fallbacks and not started:
+                    if exc.kind == "busy":
+                        GeminiBackend.busy_until[self.model] = time.time() + BUSY_SKIP
                     self.model = self.fallbacks.pop(0)       # retired, overloaded or out of quota: the next free one
                 elif exc.kind in ("busy", "rate") and not retried:
                     retried = True                           # mid-solve its thought signatures tie it to this model
