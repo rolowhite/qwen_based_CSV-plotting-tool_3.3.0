@@ -1,6 +1,7 @@
 """Measure the Notebook's reading and matching on its solution library (the library is the answer key).
 
     python scripts/eval_notebook.py --n 60          (the app's built-in Walpole solutions; --library for others)
+    python scripts/eval_notebook.py --live --n 20   (solving: qwen, and Gemini with the key from the settings)
 
 For a sample of exercises that have a **Problem:** block and a ✔ checker line, each problem is drawn as a
 picture twice (a clean page drawn by the browser with KaTeX, and a tilted, blurred, JPEG "phone photo" of
@@ -16,6 +17,7 @@ import difflib
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -26,7 +28,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from plotstudio.core.notebook import library, library_match, lookup, ollama, render, session  # noqa: E402
+from plotstudio.core.notebook import library, library_match, lookup, ollama, render, session, solver  # noqa: E402
 
 BROWSERS = [r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
             r"C:\Program Files\Microsoft\Edge\Application\msedge.exe", "msedge", "microsoft-edge", "chromium",
@@ -108,6 +110,113 @@ def run_one(e, image, index, url, model) -> dict:
             "problems_read": len(first), "read": read}
 
 
+FINAL = re.compile(r"\*\*([^*\n]+)\*\*|\\mathbf\{([^{}]+)\}")
+
+
+def final_values(e) -> list:
+    """The stored solution's results: the numbers it puts in bold (**0.7981**, \\mathbf{0.88})."""
+    values = []
+    for a, b in FINAL.findall(e.solution_md):
+        text = a or b
+        if re.match(r"\s*\(?[a-z]\)", text):          # a part label such as **(a)**
+            continue
+        values += [v for _, v in solver._floats(text)]
+    return values
+
+
+def _found_all(markdown: str, wanted) -> bool:
+    """Every stored result is in the answer line: within rel 1e-3, or equal once rounded to the decimals the book
+    wrote (it writes 23 cups for 22.75 and 0.001 for 0.000973). Answers in words (Gamma(2, 1)) can't be scored
+    this way: check those by hand."""
+    got = [v for _, v in solver._floats(solver.answer_text(markdown or ""))]
+
+    def same(w, g):
+        decimals = 0 if float(w).is_integer() else len(repr(float(w)).split(".")[1])
+        return solver._close(w, g) or round(g, decimals) == round(w, decimals)
+    return all(any(same(w, g) for g in got) for w in wanted)
+
+
+def _score(row):
+    row["shown_right"] = bool(row.get("shown_answer")) and _found_all(row["shown_answer"], row["wanted"])
+    for name in ("qwen", "gemini"):
+        answer = row.get(f"{name}_answer")
+        row[f"{name}_right"] = None if answer is None else _found_all(answer, row["wanted"])
+
+
+def _saved_key() -> str:
+    from plotstudio import settings
+    try:
+        return json.loads(settings.PATH.read_text(encoding="utf-8")).get("notebook_gemini_key") or ""
+    except (OSError, ValueError):
+        return ""
+
+
+def live(args):
+    """Solving, scored against the stored solutions' bold results (the library match is off)."""
+    lib = library.load([args.library])
+    index = lookup.Index(lib)
+    pool = [e for e in lib.exercises if e.has_problem and 1 <= len(final_values(e)) <= 4]
+    sample = random.Random(args.seed).sample(pool, min(args.n, len(pool)))
+    key = "" if args.no_gemini else (os.environ.get("GEMINI_API_KEY") or _saved_key())
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    saved = out / "eval_live.json"
+    rows = []
+    if args.resume and saved.is_file():
+        old = json.loads(saved.read_text(encoding="utf-8"))
+        if (old.get("seed"), old.get("n"), old.get("gemini")) != (args.seed, len(sample), bool(key)):
+            raise SystemExit("The saved results are for another --seed, --n or Gemini setting: run without --resume.")
+        rows = old["rows"]
+    done, done_now = {r["exercise"] for r in rows}, 0
+    print(f"{len(sample)} of {len(pool)} exercises with 1-4 bold results; Gemini {'on' if key else 'off'}")
+    for i, e in enumerate(sample, 1):
+        if e.key in done:
+            continue
+        if args.max and done_now >= args.max:
+            break
+        done_now += 1
+        turn = session.Turn(session.Source(e.key, text=problem_text(e)), index, args.url, args.model, pace=0,
+                            gemini_key=key, match=False)     # always solve; the library still gives context
+        start = time.perf_counter()
+        try:
+            turn.run(lambda event: None)
+            error = None
+        except Exception as exc:  # noqa: BLE001 - one failed problem is a result, not the end of the run
+            error = f"{type(exc).__name__}: {exc}"
+        answer = turn.answers[0] if turn.answers else {}
+        wanted = final_values(e)
+        solutions = {s["solver"]: s for s in answer.get("solutions", [])}
+        row = {"exercise": e.key, "wanted": wanted, "seconds": round(time.perf_counter() - start, 1),
+               "error": error, "errors": answer.get("errors"), "agree": answer.get("agree"),
+               "rechecked": answer.get("rechecked"), "shown_answer": solver.answer_text(answer.get("answer") or "")}
+        for name in ("qwen", "gemini"):
+            s = solutions.get(name)
+            row[f"{name}_answer"] = s["answer"] if s else None
+            row[f"{name}_seconds"] = s["seconds"] if s else None
+        _score(row)
+        rows.append(row)
+        mark = lambda v: "ok " if v else ("-- " if v is False else " . ")      # noqa: E731
+        print(f"{i:3}/{len(sample)} {e.number:>6}  shown {mark(row['shown_right'])} qwen {mark(row['qwen_right'])}"
+              f"gemini {mark(row['gemini_right'])} agree {row['agree']!s:5}  {row['seconds']:5.1f}s"
+              + (f"  {error}" if error else ""), flush=True)
+        saved.write_text(json.dumps({"seed": args.seed, "n": len(sample), "gemini": bool(key), "rows": rows},
+                                    ensure_ascii=False, indent=1), encoding="utf-8")
+
+    for row in rows:                    # one scoring rule for every row, also the ones from an earlier run
+        _score(row)
+
+    def share(key_):
+        part = [r[key_] for r in rows if r[key_] is not None]
+        return f"{sum(part)}/{len(part)} ({sum(part) / len(part):.0%})" if part else "-"
+
+    print(f"\nright: shown {share('shown_right')}, qwen {share('qwen_right')}, gemini {share('gemini_right')}; "
+          f"agreed {sum(r['agree'] is True for r in rows)}, disagreed {sum(r['agree'] is False for r in rows)}, "
+          f"rechecked {sum(bool(r['rechecked']) for r in rows)}; errors {sum(bool(r['error']) for r in rows)}")
+    secs = sorted(r["seconds"] for r in rows)
+    if secs:
+        print(f"median {secs[len(secs) // 2]} s per problem. Wrote {saved}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--library", default=os.environ.get("NOTEBOOK_LIBRARY") or str(library.BUILT_IN))
@@ -119,7 +228,11 @@ def main(argv=None):
     ap.add_argument("--out", default=str(Path.home() / ".csv_plot_studio" / "notebook" / "eval"))
     ap.add_argument("--resume", action="store_true", help="keep the results in --out and do only the rest")
     ap.add_argument("--max", type=int, default=0, help="stop after this many new exercises (0: no limit)")
+    ap.add_argument("--live", action="store_true", help="measure solving instead of reading and matching")
+    ap.add_argument("--no-gemini", action="store_true", help="--live without Gemini (qwen alone)")
     args = ap.parse_args(argv)
+    if args.live:
+        return live(args)
     if not args.library:
         raise SystemExit("Pass --library (or set NOTEBOOK_LIBRARY) to your solutions file or folder.")
     lib = library.load([args.library])

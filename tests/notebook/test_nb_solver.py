@@ -66,6 +66,25 @@ def test_only_one_follow_up_even_when_it_is_still_wrong():
     assert sol.checked is False and sol.markdown == "**Answer:** 0.13"
 
 
+def test_a_part_missing_from_the_answer_is_asked_for_in_the_same_one_follow_up():
+    two = "A fair coin is tossed 10 times. Find the probability of (a) exactly 3 heads; (b) no heads."
+    replies = [{"calls": ["comb(10, 3) / 2**10"]}, "**Answer:** (b) $15/128$",
+               {"calls": ["0.5**10"]}, "**Answer:** (a) $15/128$ (b) $1/1024$"]
+    with FakeOllama(TOOLS, replies=replies) as fake:
+        sol = solver.solve(_qwen(fake), two)
+        asked = fake.requests[2]["messages"][-1]["content"]
+    assert "doesn't give part (a)" in asked and len(fake.requests) == 4
+    assert solver.answer_text(sol.markdown) == "**Answer:** (a) $15/128$ (b) $1/1024$" and sol.checked
+    assert solver.missing_parts("**Answer:** 0.1", "Find it.") == []          # one question: no parts to check
+
+
+def test_the_exercises_a_problem_mentions_go_along_as_context():
+    with FakeOllama(TOOLS, replies=["**Answer:** 1"]) as fake:
+        solver.solve(_qwen(fake), "For the data of Exercise 3.40, find the mean.", context="Exercise 3.40: f(x)=2x.")
+        prompt = fake.requests[0]["messages"][1]["content"]
+    assert prompt.endswith("this is what they say:\n\nExercise 3.40: f(x)=2x.")
+
+
 def test_the_round_cap_stops_a_model_that_never_finishes(monkeypatch):
     monkeypatch.setattr(solver, "MAX_ROUNDS", 3)
     with FakeOllama(TOOLS, replies=[{"calls": ["1+1"]}] * 5) as fake:

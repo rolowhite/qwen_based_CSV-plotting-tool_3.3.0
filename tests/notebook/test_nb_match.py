@@ -44,6 +44,15 @@ def test_an_exercise_without_its_own_problem_text_is_never_used(index):
     assert library_match.match(index, text) is None
 
 
+def test_another_question_about_the_same_exercise_is_not_given_its_answer(index):
+    # same "numbers" as 1.2 (only the mention of Exercise 1.1), a different question: solved live instead
+    other = "For the marbles of Exercise 1.1, find the chance that the first marble is blue."
+    assert library_match.match(index, other) is None
+    same = "For the marbles of Exercise 1.1, find the probability that the two marbles have different colours."
+    assert library_match.match(index, same).number == "1.2"
+    assert library_match.match(index, other, label="1.2").number == "1.2"    # the page prints 1.2: trust that
+
+
 def test_a_tie_is_not_a_hit(index):
     assert index.lookup("The weights of six parcels are given in kg. Find the sample mean.").status == "choose"
     assert library_match.match(index, "The weights of six parcels are given in kg. Find the sample mean.") is None

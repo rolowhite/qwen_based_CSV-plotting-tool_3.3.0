@@ -10,6 +10,12 @@ from . import lookup
 from .library import Exercise
 
 MIN_NUMBERS = 3      # this many numbers, found in no other exercise, identify a problem whose words are few
+# Few numbers say little: "For the marbles of Exercise 1.1, find the chance the first is blue" has the same numbers
+# as 1.2 ("... that the two have different colours"). Then the picture's printed exercise number or nearly the same
+# words are needed; anything else is solved live instead, which is cheap next to a wrong stored answer.
+FEW = 2
+SMALL = {"0", "1", "2"}
+WORDS_WHEN_FEW = 0.9
 
 
 def problem_numbers(text: str) -> Counter:
@@ -60,8 +66,11 @@ def match(index: lookup.Index, markdown: str, label: str = "") -> Optional[Exerc
     numbers = problem_numbers(markdown)
     unique = sum(numbers.values()) >= MIN_NUMBERS and _sharing(index)[_key(numbers)] == 1
     printed = lookup.leading_label(f"{label} {markdown}" if label else markdown)
+    few = sum(n for k, n in numbers.items() if not k.startswith("ex") and k not in SMALL) < FEW
 
     def fits(c):
+        if few and printed != c.exercise.number and c.word_score < WORDS_WHEN_FEW:
+            return False
         stored = problem_numbers(c.exercise.problem_md)
         if stored == numbers:
             return c.score >= lookup.HIGH or (unique and c.score >= lookup.LOW)

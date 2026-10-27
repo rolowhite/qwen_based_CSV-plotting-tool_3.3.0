@@ -152,6 +152,21 @@ def test_without_ollama_a_typed_problem_is_solved_by_gemini_alone(index):
     assert "isn't running" in turn.answers[0]["errors"]["qwen"]
 
 
+def test_a_mentioned_exercise_from_the_solutions_is_given_to_the_solvers(index):
+    text = "For the marbles of Exercise 1.1, find the chance that the first marble is blue."
+    with FakeOllama(MODELS, replies=QWEN_SOLVES) as fake:
+        _run(session.Turn(session.Source("typed", text=text), index, fake.url, pace=0))
+        prompt = fake.requests[0]["messages"][1]["content"]
+    assert "Exercise 1.1: A box holds 7 red and 5 blue marbles." in prompt
+    turn = session.Turn(session.Source("typed", text=MARBLES), index, match=False)
+    assert turn._match(reader_problem(MARBLES)) is None            # match=False: always solved (the live eval)
+
+
+def reader_problem(text):
+    from plotstudio.core.notebook import reader
+    return reader.Problem("", text)
+
+
 def test_without_ollama_or_a_key_a_new_problem_needs_setting_up(index):
     turn = session.Turn(session.Source("typed", text=COIN), index, "http://127.0.0.1:9", pace=0)
     with pytest.raises(ollama.NotReady, match="isn't running"):

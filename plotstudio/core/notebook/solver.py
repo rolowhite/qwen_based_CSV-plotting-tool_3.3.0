@@ -18,7 +18,7 @@ from .gemini import Gemini, GeminiError
 
 MAX_ROUNDS = 25
 REL = 1e-3                  # numbers this close are the same answer (0.6496 vs 0.65 is, 0.6 vs 0.65 isn't)
-OLLAMA_OPTIONS = {"temperature": 0, "num_ctx": 8192, "num_predict": 2048}
+OLLAMA_OPTIONS = {"temperature": 0, "num_ctx": 8192, "num_predict": 4096}     # a regression's steps are long
 
 SYSTEM = """You are a statistics tutor writing a worked solution on a board.
 - Start with **Given:** and the facts the problem gives (briefly).
@@ -228,25 +228,53 @@ def _replace_answer(markdown: str, line: str) -> str:
     return markdown[:m.start()] + line + markdown[m.end():]
 
 
-def solve(backend, problem: str, image=None, cancelled: Callable[[], bool] = lambda: False) -> Solution:
-    """Work `problem` (Markdown) out with `backend`; every number from the calculator, checked once."""
+_PART = re.compile(r"\(([a-h])\)")
+
+
+def missing_parts(markdown: str, problem: str) -> List[str]:
+    """The parts the problem asks for, (a), (b) ..., that the **Answer:** line doesn't mention."""
+    asked = sorted(set(_PART.findall(problem)))
+    answer = answer_text(markdown)
+    return [f"({p})" for p in asked if f"({p})" not in answer] if len(asked) > 1 else []
+
+
+def _follow_up(markdown: str, problem: str, log: List[dict]) -> str:
+    """The one follow-up message, or '' when the answer line is complete and every number came from calculate."""
+    asks = []
+    numbers = unchecked(markdown, problem, log)
+    if numbers:
+        asks.append(FOLLOW_UP.format(numbers=", ".join(numbers), it="it" if len(numbers) == 1 else "them"))
+    parts = missing_parts(markdown, problem)
+    if parts:
+        asks.append(f"Your **Answer:** line doesn't give part{'s' if len(parts) > 1 else ''} {', '.join(parts)}. "
+                    "Solve what is missing (numbers from calculate), then write the complete **Answer:** line.")
+    return " ".join(asks)
+
+
+def solve(backend, problem: str, image=None, cancelled: Callable[[], bool] = lambda: False,
+          context: str = "") -> Solution:
+    """Work `problem` (Markdown) out with `backend`; every number from the calculator, checked once.
+    `context` is reference text the problem relies on (the exercises it mentions)."""
     start = time.perf_counter()
-    backend.begin(SYSTEM, f"Solve this statistics problem.\n\n{problem}", image)
+    prompt = f"Solve this statistics problem.\n\n{problem}"
+    if context:
+        prompt += f"\n\nThe problem refers to other exercises; this is what they say:\n\n{context}"
+    backend.begin(SYSTEM, prompt, image)
     texts, log = [], []
     _rounds(backend, texts, log, cancelled)
     markdown = "\n\n".join(texts).strip()
     if not markdown:
         raise SolverError("The solver wrote nothing.")
     checked = True
-    missing = unchecked(markdown, problem, log)
-    if missing:
-        backend.say(FOLLOW_UP.format(numbers=", ".join(missing), it="it" if len(missing) == 1 else "them"))
+    ask = _follow_up(markdown, problem, log)
+    if ask:
+        backend.say(ask)
         more = []
         _rounds(backend, more, log, cancelled)
         line = answer_text("\n\n".join(more))
         if line:
             markdown = _replace_answer(markdown, line)
-        checked = not unchecked(markdown, problem, log)
+        checked = not _follow_up(markdown, problem, log)
     return Solution(markdown, backend.model, log, round(time.perf_counter() - start, 1), checked)
 
 
@@ -262,4 +290,4 @@ def recheck(backend, solution: Solution, other_answer: str, problem: str,
     if not answer_text(markdown):
         return solution
     return Solution(markdown, backend.model, solution.tool_log, round(solution.seconds + time.perf_counter() - start, 1),
-                    not unchecked(markdown, problem, solution.tool_log))
+                    not _follow_up(markdown, problem, solution.tool_log))

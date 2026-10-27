@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
-from . import gemini, library_match, ollama, reader, solver
+from . import gemini, library_match, lookup, ollama, reader, solver
 
 NOTHING = "I couldn't find a problem in this picture. Try a sharper picture, or mark just the problem."
 PACE = 0.03              # seconds between streamed pieces
@@ -62,7 +62,7 @@ class Turn:
 
     def __init__(self, source: Source, index=None, url: str = ollama.DEFAULT_URL, wanted_model: str = "",
                  log_path: Optional[Path] = None, pace: Optional[float] = None, gemini_key: str = "",
-                 gemini_model: str = "", gemini_base: str = gemini.BASE_URL):
+                 gemini_model: str = "", gemini_base: str = gemini.BASE_URL, match: bool = True):
         self.source = source
         self.index = index
         self.chat = ollama.Chat(url)
@@ -74,6 +74,7 @@ class Turn:
         self.reads: List[reader.Reading] = []
         self.answers: List[dict] = []
         self._gemini = (gemini_key, gemini_model, gemini_base)
+        self.match = match              # False: always solve (the live eval), the library still gives context
         self.gemini_problem = None      # why Gemini didn't help this turn (the page shows it in the Model menu)
         self._backends = []
 
@@ -108,7 +109,20 @@ class Turn:
 
     # ------------------------------------------------------------------------------------------- steps --
     def _match(self, problem: reader.Problem):
-        return library_match.match(self.index, problem.markdown, problem.label) if self.index is not None else None
+        if self.index is None or not self.match:
+            return None
+        return library_match.match(self.index, problem.markdown, problem.label)
+
+    def _context(self, text: str) -> str:
+        """The problems of the exercises `text` mentions ("the joint density of Exercise 3.40"), from the library."""
+        if self.index is None:
+            return ""
+        found = []
+        for token in dict.fromkeys(t for t in lookup.numbers(text) if t.startswith("ex")):
+            exercise = self.index.library.get(token[2:])
+            if exercise is not None and exercise.has_problem:
+                found.append(f"Exercise {exercise.number}: " + exercise.problem_md.replace("**Problem:**", "", 1).strip())
+        return "\n\n".join(found)[:6000]
 
     def _typed(self):
         problem = reader.Problem("", self.source.text.strip())
@@ -180,10 +194,11 @@ class Turn:
             raise qwen_problem
         self._backends = [b for b, _ in jobs.values()]
         results, cancelled = {}, (lambda: self.chat.cancelled)
+        context = self._context(problem.markdown)
 
         def work(name, backend, image):
             try:
-                results[name] = solver.solve(backend, problem.markdown, image, cancelled)
+                results[name] = solver.solve(backend, problem.markdown, image, cancelled, context)
             except BaseException as exc:  # noqa: BLE001 - kept: the other solver may still answer
                 results[name] = exc
 
