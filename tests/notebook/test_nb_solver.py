@@ -145,13 +145,6 @@ def test_a_retired_model_falls_through_to_the_next_free_one():
     assert gemini.pick(["x"], wanted="x") == "x" and gemini.pick(["x"]) is None
 
 
-@pytest.fixture(autouse=True)
-def _no_busy_memory():
-    solver.GeminiBackend.busy_until.clear()
-    yield
-    solver.GeminiBackend.busy_until.clear()
-
-
 def test_an_overloaded_model_falls_through_before_it_starts_and_is_retried_once_after(monkeypatch):
     monkeypatch.setattr(solver, "BUSY_WAIT", 0)
     with FakeGemini(busy={"gemini-3.8-flash"}, replies=[fg.text("**Answer:** 0.1171875")] * 2) as fake:
@@ -172,17 +165,17 @@ def test_an_overloaded_model_falls_through_before_it_starts_and_is_retried_once_
         assert sum("3.8-flash" in path for path, _, _ in fake.requests) == 3          # first, then one retry
 
 
-def test_a_per_minute_limit_waits_as_google_asks_and_a_used_up_model_falls_through(monkeypatch):
-    waits = []
-    monkeypatch.setattr(solver.time, "sleep", waits.append)
+def test_a_per_minute_limit_waits_as_google_asks_and_a_used_up_model_falls_through():
+    import time
     with FakeGemini(replies=[fg.call("comb(10, 3) / 2**10"), fg.text("**Answer:** 15/128")]) as fake:
         backend = _gem(fake)
         backend.begin(solver.SYSTEM, COIN)
         backend.turn()
         fake.rate_limited.add("gemini-3.8-flash")                    # mid-solve: wait 1 s, same model again
         backend.results([(None, "x")], ["15/128 ≈ 0.1171875"])
+        start = time.time()
         text, _ = backend.turn()
-    assert waits == [1.0] and text == "**Answer:** 15/128" and backend.model == "gemini-3.8-flash"
+    assert 0.9 <= time.time() - start < 5 and text == "**Answer:** 15/128" and backend.model == "gemini-3.8-flash"
     with FakeGemini(out_of_quota={"gemini-3.8-flash"}, replies=[fg.text("**Answer:** 0.1171875")]) as fake:
         sol = solver.solve(_gem(fake), COIN + " It is 0.1171875.")
     assert sol.model == "gemini-3.6-flash"                            # before it starts: the next free model

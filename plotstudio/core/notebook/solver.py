@@ -113,7 +113,7 @@ class OllamaBackend:
 class GeminiBackend:
     """Google's Gemini (the user's own key). It gets the problem's text and, when there is one, the picture."""
 
-    busy_until: dict = {}           # model -> time.time() until which it is skipped (it just said it's overloaded)
+    busy_until: dict = {}           # model -> time.time() until which it is skipped (overloaded, or out of quota)
 
     def __init__(self, client: Gemini, model: str, fallbacks=()):
         order = [model] + [m for m in fallbacks if m != model]
@@ -140,13 +140,16 @@ class GeminiBackend:
                 break
             except GeminiError as exc:
                 started = any(c.get("role") == "model" for c in self.contents)
+                if exc.kind in ("busy", "quota"):          # skip it in later solves: a while, or until the reset
+                    skip = exc.retry_after if exc.kind == "quota" and exc.retry_after else BUSY_SKIP
+                    GeminiBackend.busy_until[self.model] = time.time() + skip
                 if exc.kind in ("model", "busy", "rate", "quota") and self.fallbacks and not started:
-                    if exc.kind == "busy":
-                        GeminiBackend.busy_until[self.model] = time.time() + BUSY_SKIP
                     self.model = self.fallbacks.pop(0)       # retired, overloaded or out of quota: the next free one
                 elif exc.kind in ("busy", "rate") and not retried:
                     retried = True                           # mid-solve its thought signatures tie it to this model
-                    time.sleep(min(exc.retry_after or BUSY_WAIT, MAX_WAIT))
+                    end = time.time() + min(exc.retry_after or BUSY_WAIT, MAX_WAIT)
+                    while time.time() < end and not self.client.cancelled:      # Stop and the budget still work
+                        time.sleep(0.2)
                 else:
                     raise
         candidates = data.get("candidates") or []

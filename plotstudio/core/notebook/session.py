@@ -196,12 +196,22 @@ class Turn:
         if not jobs:
             raise qwen_problem
         self._backends = [b for b, _ in jobs.values()]
-        results, cancelled = {}, (lambda: self.chat.cancelled)
+        results, used, cancelled = {}, {}, (lambda: self.chat.cancelled)
         context = self._context(problem.markdown)
 
         def work(name, backend, image):
             try:
-                results[name] = solver.solve(backend, problem.markdown, image, cancelled, context)
+                used[name] = backend
+                try:
+                    results[name] = solver.solve(backend, problem.markdown, image, cancelled, context)
+                except gemini.GeminiError as exc:
+                    # out of today's quota mid-solve: once more from the start on the next free model
+                    fresh = solver.GeminiBackend(backend.client, backend.model, gemini.MODELS) \
+                        if name == "gemini" and exc.kind == "quota" else None
+                    if fresh is None or fresh.model == backend.model:
+                        raise
+                    used[name] = fresh
+                    results[name] = solver.solve(fresh, problem.markdown, image, cancelled, context)
             except BaseException as exc:  # noqa: BLE001 - kept: the other solver may still answer
                 results[name] = exc
 
@@ -244,7 +254,7 @@ class Turn:
             agree = solver.agree(ok["gemini"].markdown, ok["qwen"].markdown, problem.markdown)
             if agree is False:
                 try:
-                    shown = solver.recheck(gem, ok["gemini"], solver.answer_text(ok["qwen"].markdown),
+                    shown = solver.recheck(used["gemini"], ok["gemini"], solver.answer_text(ok["qwen"].markdown),
                                            problem.markdown, cancelled)
                     rechecked = True
                 except (gemini.GeminiError, solver.SolverError) as exc:

@@ -181,6 +181,23 @@ def test_a_local_model_past_its_time_budget_is_stopped(index, monkeypatch):
     assert "**Answer:** 0.1171875" in answers[0] and "took the model" in turn.answers[0]["errors"]["qwen"]
 
 
+def test_a_model_that_runs_out_of_quota_mid_solve_starts_over_on_the_next_and_is_skipped_after(index):
+    from fake_gemini import FakeGemini, call, text
+    from plotstudio.core.notebook import solver
+    replies = [call("comb(10, 3) / 2**10"), call("comb(10, 3) / 2**10"), text("**Answer:** 0.1171875"),
+               call("comb(10, 3) / 2**10"), text("**Answer:** 0.1171875")]
+    with FakeOllama(MODELS, replies=QWEN_SOLVES * 2) as qwen, \
+            FakeGemini(quota_after={"gemini-3.8-flash": 1}, replies=replies) as gem:
+        turn = _gemini_turn(index, qwen.url, gem.url)
+        _run(turn)
+        assert turn.answers[0]["from"] == "solver:gemini-3.6-flash" and turn.answers[0]["agree"] is True
+        assert "gemini-3.8-flash" in solver.GeminiBackend.busy_until             # skipped from now on
+        later = _gemini_turn(index, qwen.url, gem.url)
+        _run(later)
+        assert [p for p, _, _ in gem.requests][-1].startswith("/v1beta/models/gemini-3.6-flash")
+        assert sum("3.8-flash" in p for p, _, _ in gem.requests) == 2           # never asked again
+
+
 def test_a_slow_gemini_gives_way_to_qwens_answer_after_the_grace_period(index, monkeypatch):
     from fake_gemini import FakeGemini, text
     monkeypatch.setattr(session, "GEMINI_GRACE", 0.5)

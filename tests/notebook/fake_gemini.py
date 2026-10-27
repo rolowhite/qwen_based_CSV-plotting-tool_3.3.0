@@ -28,9 +28,11 @@ def call(*expressions, signature="sig-1"):
 
 class FakeGemini:
     def __init__(self, key="test-key", replies=(), models=MODELS, busy=(), out_of_quota=(), rate_limited=(),
-                 slow=None):
+                 slow=None, quota_after=None):
         self.key, self.replies, self.models, self.requests = key, list(replies), list(models), []
         self.slow = dict(slow or {})            # model -> seconds it stalls before answering
+        self.quota_after = dict(quota_after or {})      # model -> requests it answers before its day is used up
+        self.answered = {}
         self.busy = set(busy)                   # models that answer 503 "high demand"
         self.out_of_quota = set(out_of_quota)   # 429, the free requests per day are used up
         self.rate_limited = set(rate_limited)   # 429 once, per minute, "retry in 1s" (then answer)
@@ -72,6 +74,9 @@ class FakeGemini:
                     return
                 if model in fake.slow:
                     time.sleep(fake.slow[model])
+                if model in fake.quota_after and fake.answered.get(model, 0) >= fake.quota_after[model]:
+                    fake.out_of_quota.add(model)
+                fake.answered[model] = fake.answered.get(model, 0) + 1
                 if model in fake.out_of_quota or model in fake.rate_limited:
                     per_day = model in fake.out_of_quota
                     fake.rate_limited.discard(model)

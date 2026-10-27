@@ -47,7 +47,9 @@ def _error(status: int, body: bytes, model: str = "") -> GeminiError:
         except ValueError:
             wait = None
         if "PerDay" in quota_ids or (wait is None and "PerMinute" not in quota_ids):
-            return GeminiError(f"Gemini's free quota for {model or 'this model'} is used up for today.", "quota")
+            # the free tier allows each model a few requests a day (20 for this key on 2026-10-27)
+            return GeminiError(f"Gemini's free quota for {model or 'this model'} is used up for today.", "quota",
+                               wait)
         return GeminiError("Gemini's free per-minute limit was reached; it lets you try again in "
                            f"{wait or 60:.0f} s.", "rate", wait or 60.0)
     if "API_KEY_INVALID" in reasons or "API key not valid" in text or status in (401, 403):
