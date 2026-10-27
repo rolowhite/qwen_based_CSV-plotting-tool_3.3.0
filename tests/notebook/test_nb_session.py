@@ -233,6 +233,22 @@ def test_a_pdf_text_layer_that_is_a_library_problem_needs_no_reading_model(index
     assert r"\mathbf{0.3182}" in answers[0] and "Reading the problem…" not in [e[1] for e in events]
 
 
+def test_a_quick_ocr_reading_that_is_a_library_problem_needs_no_vision_model(index, monkeypatch):
+    monkeypatch.setattr(session.reader, "ocr_text", lambda image: "1.1 " + MARBLES.replace("$", ""))
+    with FakeOllama(MODELS, replies=[]) as fake:
+        answers, events = _run(session.Turn(session.Source("p.png", _picture()), index, fake.url, pace=0))
+        assert fake.requests == []                                         # the model never read the picture
+    assert r"\mathbf{0.3182}" in answers[0] and [e[1] for e in events if e[0] == "status"][0] == "Reading the problem…"
+
+
+def test_an_ocr_reading_that_is_no_library_problem_goes_on_to_the_vision_model(index, monkeypatch):
+    monkeypatch.setattr(session.reader, "ocr_text", lambda image: "garbled 7 red 9 blue")
+    with FakeOllama(MODELS, replies=[_reply(("1.1", MARBLES))]) as fake:
+        answers, events = _run(session.Turn(session.Source("p.png", _picture()), index, fake.url, pace=0))
+        assert len(fake.requests) == 1
+    assert [e[1] for e in events if e[0] == "status"].count("Reading the problem…") == 1
+
+
 def test_without_ollama_or_a_key_a_new_problem_needs_setting_up(index):
     turn = session.Turn(session.Source("typed", text=COIN), index, "http://127.0.0.1:9", pace=0)
     with pytest.raises(ollama.NotReady, match="isn't running"):

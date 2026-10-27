@@ -83,6 +83,8 @@ class Turn:
         self.match = match              # False: always solve (the live eval), the library still gives context
         self.gemini_problem = None      # why Gemini didn't help this turn (the page shows it in the Model menu)
         self._backends = []
+        self._found = None              # ollama.models(), once per turn
+        self._said_reading = False
         self._notes = {}                # problem text -> which number was read differently from the library's
 
     def cancel(self):
@@ -149,8 +151,14 @@ class Turn:
         problem = reader.Problem("", self.source.text.strip())
         return [problem], [self._match(problem)]
 
+    def _models(self):
+        """Ollama's models, asked once a turn (each one costs a request for its capabilities)."""
+        if self._found is None:
+            self._found = ollama.models(self.url)
+        return self._found
+
     def _pick_model(self):
-        found = ollama.models(self.url)
+        found = self._models()
         name = ollama.pick(found, "vision", self.wanted, avoid="thinking")
         if name is None:
             raise ollama.NotReady("None of the models installed in Ollama can read pictures. Run: "
@@ -158,23 +166,31 @@ class Turn:
         caps = dict(found)[name]
         return name, (False if "thinking" in caps else None)      # thinking only slows plain copying down
 
-    def _from_text_layer(self):
-        """A digital PDF's own text, exact characters: when it alone is a library problem, no model has to read the
-        picture (the slowest step). Anything less than a sure match falls through to the usual reading."""
+    def _from_text_layer(self, emit):
+        """A digital PDF's own text (exact characters), or else Tesseract's quick reading of the picture: when it
+        alone is a library problem, no model has to read the picture (the slowest step). Anything less than a sure
+        match falls through to the usual reading."""
+        if self.index is None or not self.match:
+            return None
         text = reader.clean_text(self.source.hint)
-        if not text or self.index is None or not self.match:
+        if not text:
+            emit(("status", "Reading the problem…"))
+            self._said_reading = True
+            text = reader.ocr_text(self.source.image)
+        if not text:
             return None
         problem = reader.Problem("", text)
         exercise = self._match(problem)
         return ([problem], [exercise]) if exercise is not None else None
 
     def _read(self, emit):
-        quick = self._from_text_layer()
+        quick = self._from_text_layer(emit)
         if quick is not None:
             return quick
         self.model, think = self._pick_model()
         image, hint = self.source.image, self.source.hint
-        emit(("status", "Reading the problem…"))
+        if not self._said_reading:
+            emit(("status", "Reading the problem…"))
         try:
             first = reader.read(self.chat, self.model, image, hint, think)
         except ollama.NotReady:
@@ -204,7 +220,7 @@ class Turn:
     def _qwen(self):
         """The local solver, or (None, why not)."""
         try:
-            found = ollama.models(self.url)
+            found = self._models()
         except ollama.OllamaError as exc:
             return None, exc
         name = ollama.pick(found, "tools", self.wanted, avoid="thinking")

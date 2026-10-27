@@ -34,7 +34,7 @@ GUTTER = 12
 THUMB = 240             # px: the long side of the picture in a bubble
 STREAM = object()       # marks a streamed event in the job queue (the job isn't finished yet)
 LIBRARY_FILES = nb_library.BUILT_IN_FILES    # the solutions every answer comes from (for now); tests swap in their own
-OWN_PROGRESS = {"setup"}                  # jobs that show their own progress bar, not the header's busy bar
+OWN_PROGRESS = {"setup", "warm"}                  # jobs that show their own progress bar, not the header's busy bar
 GEMINI_NOTICE = ("Gemini (Google) then solves new problems alongside the model on this computer, and its solution "
                  "is shown. The problem's text and picture are sent to Google for that. With a free key, Google may "
                  "use what you send to improve its products and people at Google may read it, so don't send anything "
@@ -439,6 +439,7 @@ class NotebookPage(ttk.Frame):
         t, px = app.theme, app.theme.px
         g = px(GUTTER)
         self.library = None
+        self._warmed = set()
         self.index = None
         self.pdf = None             # open PdfDoc in the page picker
         self.pdf_index = 0
@@ -742,6 +743,11 @@ class NotebookPage(ttk.Frame):
                 if chosen is None:
                     self.answers.setup("Ollama is running, but none of its models can read pictures.")
         self._fill_model_menu()
+        chosen = ollama.pick(self._models, "vision", self.model_var.get(), avoid="thinking") if self._models else None
+        if chosen and chosen not in self._warmed:       # load it now, while the user is still choosing a picture
+            self._warmed.add(chosen)
+            url = self._url()
+            self._run("warm", lambda: ollama.warm(url, chosen), lambda result, err: None)
 
     def _fill_model_menu(self):
         menu = self.model_menu

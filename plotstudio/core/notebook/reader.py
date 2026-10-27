@@ -120,6 +120,26 @@ def read(chat: "ollama.Chat", model: str, image, hint: str = "", think: Optional
     return reading
 
 
+OCR_SIDE = (1400, 2400)     # px: Tesseract reads small print badly and a huge picture slowly
+
+
+def ocr_text(image, timeout: float = 8.0) -> str:
+    """Tesseract's reading of a picture, or '' when it isn't installed or fails. It is fast (1-3 s) and copies
+    digits exactly but knows no math layout: it is only used to find a library problem before the slow vision
+    model has to read the picture; anything but a sure match is read by the model as before."""
+    try:
+        import pytesseract
+        from PIL import Image, ImageOps
+
+        gray = ImageOps.grayscale(image)
+        k = min(max(OCR_SIDE[0] / max(gray.size), 1.0), OCR_SIDE[1] / max(gray.size))
+        if abs(k - 1.0) > 0.05:
+            gray = gray.resize((round(gray.width * k), round(gray.height * k)), Image.LANCZOS)
+        return clean_text(pytesseract.image_to_string(gray, config="--psm 6", timeout=timeout))
+    except Exception:  # noqa: BLE001 - no Tesseract, a timeout, a broken picture: the model reads it instead
+        return ""
+
+
 # --------------------------------------------------------------------------------------------- PDFs --
 def clean_text(text: str) -> str:
     """A PDF text layer without the characters that only break matching: soft hyphens, replacement characters

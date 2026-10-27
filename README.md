@@ -569,8 +569,11 @@ a dataset, such as Walpole 1.4 and 10.107). When the number is printed and the w
 no longer change the match. Measured on 400 library problems with the PDF text layer's noise added: no printed number
 0 → 90 % matched, printed number 5 % → 97 % with one digit changed, and no wrong exercise in 2,400 tries.
 
-**Speed.** A digital PDF's text layer that is itself a library problem is matched without reading the picture with
-the vision model (the slowest step). A problem that is not in the library is no longer read a second time. With a
+**Speed.** A digital PDF's text layer, or (with Tesseract installed, which the Windows starter does) a quick OCR
+reading of a picture, that is itself a library problem is matched without the vision model reading the picture (the
+slowest step): about 0.2 s, and on 40 clean rendered pages 31–32 matched with none wrong (real photos will do
+worse; those go to the vision model as before). Ollama keeps the model loaded for 30 minutes and loads it when the
+Notebook opens, so the first picture doesn't wait for it. A problem that is not in the library is no longer read a second time. With a
 Gemini key, whichever solver finishes first is used and the other gets only 30 s (Gemini) or 90 s (local) to
 cross-check, instead of waiting minutes for the local model. A stored answer is shown in about a second.
 
