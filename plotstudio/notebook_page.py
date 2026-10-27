@@ -120,10 +120,8 @@ class AnswerView(tk.Frame):
         self._add(("note", text, tag))
 
     def show_turn(self, n):
-        try:
+        if f"turn{n}" in self.text.mark_names():
             self.text.yview(f"turn{n}")
-        except tk.TclError:
-            pass
 
     def plain_text(self) -> str:
         return self.text.get("1.0", "end-1c")
@@ -814,8 +812,9 @@ class NotebookPage(ttk.Frame):
             focus = self.focus_get()
         except (KeyError, tk.TclError):   # focus inside a combobox drop-down
             return
-        if isinstance(focus, (tk.Entry, ttk.Entry, tk.Text)):
-            return           # the text box handles its own paste (see _entry_paste)
+        if isinstance(focus, (tk.Entry, ttk.Entry)) or (isinstance(focus, tk.Text) and
+                                                        str(focus.cget("state")) == "normal"):
+            return           # a text box pastes for itself (the composer's: see _entry_paste)
         self.paste_image()
 
     def send_text(self):
@@ -948,8 +947,8 @@ class NotebookPage(ttk.Frame):
         self.set_status("")
         if error is None:
             return
+        self.answers.finish()           # keep what had arrived, drawn
         if isinstance(error, ollama.Cancelled):
-            self.answers.finish()
             self.answers.note("Stopped.")
         elif isinstance(error, ollama.NotReady):
             self.answers.setup(str(error))
