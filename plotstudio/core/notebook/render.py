@@ -140,20 +140,29 @@ SCRIPT = """document.querySelectorAll('.math').forEach(function(e){try{katex.ren
 if(location.hash){var t=document.getElementById(decodeURIComponent(location.hash.slice(1)));if(t)t.scrollIntoView();}"""
 
 
+def _page(title: str, body: str, dark: bool) -> str:
+    """A whole HTML page: the theme's look, the bundled fonts and KaTeX, and `body` (already HTML)."""
+    return (f'<!doctype html><html lang="en" data-theme="{"dark" if dark else "light"}"><head><meta charset="utf-8">'
+            f'<meta name="viewport" content="width=device-width,initial-scale=1"><title>{title}</title>'
+            f'<link rel="stylesheet" href="{(KATEX / "katex.min.css").as_uri()}">'
+            f'<style>{_font_faces()}{CSS}</style>'
+            f'<script src="{(KATEX / "katex.min.js").as_uri()}"></script></head><body>'
+            f'{body}<script>{SCRIPT}</script></body></html>')
+
+
 def chapter_page(library: Library, book: str, chapter: int, dark: bool = False) -> str:
     exercises = [e for e in library.exercises if e.book == book and e.chapter == chapter]
     nav = "".join(f'<a href="{page_name(book, c)}" class="{"on" if c == chapter else ""}">{c}</a>'
                   for c in library.chapters(book))
     edition = next((e.edition for e in exercises if e.edition), "")
     heading = f"{html.escape(book.title())} {html.escape(edition)} · Chapter {chapter}".replace("  ", " ")
-    return (f'<!doctype html><html lang="en" data-theme="{"dark" if dark else "light"}"><head><meta charset="utf-8">'
-            f'<meta name="viewport" content="width=device-width,initial-scale=1"><title>{heading}</title>'
-            f'<link rel="stylesheet" href="{(KATEX / "katex.min.css").as_uri()}">'
-            f'<style>{_font_faces()}{CSS}</style>'
-            f'<script src="{(KATEX / "katex.min.js").as_uri()}"></script></head><body>'
-            f'<header><b>{heading}</b>{nav}</header><main>'
-            + "".join(_exercise_html(e, library) for e in exercises)
-            + f'</main><script>{SCRIPT}</script></body></html>')
+    return _page(heading, f'<header><b>{heading}</b>{nav}</header><main>'
+                 + "".join(_exercise_html(e, library) for e in exercises) + '</main>', dark)
+
+
+def answer_page(markdown: str, dark: bool = False) -> str:
+    """One Notebook answer as a page, for "Open in browser" (the math drawn by KaTeX)."""
+    return _page("Solution", f'<main><section class="exercise">{markdown_html(markdown)}</section></main>', dark)
 
 
 def library_digest(library: Library) -> str:
