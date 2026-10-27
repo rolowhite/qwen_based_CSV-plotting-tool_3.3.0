@@ -70,6 +70,11 @@ def test_doubly_escaped_line_breaks_and_a_repeated_problem_are_repaired():
     assert reader.line_breaks(r"$\nu \neq 0$ and \$5\n$\nabla$") == "$\\nu \\neq 0$ and \\$5\n$\\nabla$"
 
 
+def test_a_label_repeated_in_the_text_is_dropped_there():
+    reading = reader.parse(_reply(("1.31", "1.31 Consider Exercise 1.28."), ("2.4", "2.40 is a value.")))
+    assert [p.markdown for p in reading.problems] == ["Consider Exercise 1.28.", "2.40 is a value."]
+
+
 def test_fenced_json_empty_problems_and_unreadable_notes():
     raw = "```json\n" + _reply(("", "Find the mean."), ("", "  "), unreadable=["the figure's axis"]) + "\n```"
     reading = reader.parse(raw)

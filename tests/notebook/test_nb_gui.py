@@ -125,6 +125,21 @@ def test_no_ollama_shows_how_to_set_it_up_and_typing_still_works(app):
     assert not app.errors
 
 
+def test_no_solutions_loaded_says_so_instead_of_cant_solve(app):
+    nb = _ready(app, "http://127.0.0.1:9")
+    app.cfg["notebook_library"] = []
+    nb.reload_library()
+    _wait(app, lambda: not nb._loading)
+    assert nb.library.exercises == []
+    for _ in range(2):                                          # a second paste doesn't add a second card
+        assert nb.submit(nb_session().Source("Typed", text=MARBLES)) is False
+    assert nb._turn is None and nb.answers.items == [("library",)]
+    texts = [w.cget("text") for w in nb.answers._windows[-1].winfo_children() if isinstance(w, tk.ttk.Label)]
+    assert "Add your solutions first" in texts
+    assert nb_session().NOT_YET not in nb.answers.plain_text()
+    assert not app.errors
+
+
 def test_a_formula_mathtext_cant_draw_shows_its_source(app):
     nb = _ready(app, "http://127.0.0.1:9")
     nb.answers.add_turn(1)

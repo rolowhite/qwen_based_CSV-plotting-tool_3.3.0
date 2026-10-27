@@ -115,6 +115,12 @@ class AnswerView(tk.Frame):
         self._live = None
         self._add(("setup", message))
 
+    def library_needed(self):
+        self._live = None
+        if not self.items or self.items[-1] != ("library",):
+            self._add(("library",))
+        self.text.see("end")
+
     def note(self, text, tag="muted"):
         self._live = None
         self._add(("note", text, tag))
@@ -207,6 +213,8 @@ class AnswerView(tk.Frame):
                 self._actions(item[1])
         elif kind == "setup":
             self._setup_card(item[1])
+        elif kind == "library":
+            self._library_card()
         else:
             self._insert(item[1] + "\n", (item[2], "p"))
 
@@ -402,6 +410,23 @@ class AnswerView(tk.Frame):
             anchor="w", pady=(px(8), 0))
         ttk.Button(card, text="Check again", style="Accent.TButton", command=self.page.check_models).pack(
             anchor="w", pady=(px(10), 0))
+        self._windows.append(card)
+        self.text.window_create("end-1c", window=card)
+        self._insert("\n", ("p",))
+
+    def _library_card(self):
+        px = self.px
+        card = ttk.Frame(self.text, style="Well.TFrame", padding=(px(16), px(12)))
+        ttk.Label(card, text="Add your solutions first", style="Raised.Bold.TLabel").pack(anchor="w")
+        ttk.Label(card, text="No solutions are loaded, so there is nothing to answer from yet. Pick your solutions "
+                             "file (for example Walpole_All_Chapters_Solutions.md) or a folder of .md files; they are "
+                             "only read, never changed. Then paste the problem again.", style="Raised.Muted.TLabel",
+                  wraplength=px(440), justify="left").pack(anchor="w", pady=(px(4), px(10)))
+        row = ttk.Frame(card, style="Well.TFrame")
+        row.pack(anchor="w")
+        ttk.Button(row, text="Add a solutions file…", style="Accent.TButton", command=self.page.add_file).pack(
+            side="left")
+        ttk.Button(row, text="Add a folder…", command=self.page.add_folder).pack(side="left", padx=(px(6), 0))
         self._windows.append(card)
         self.text.window_create("end-1c", window=card)
         self._insert("\n", ("p",))
@@ -919,6 +944,13 @@ class NotebookPage(ttk.Frame):
         """Start a turn: a bubble on the left, its answer streamed on the right. False while one is running."""
         if self._turn is not None:
             self._note("Wait for this answer, or press Stop.", "Warn.TLabel")
+            return False
+        if self._loading:
+            self._note("Your solutions are still loading. Try again in a moment.", "Warn.TLabel")
+            return False
+        if self.library is None or not self.library.exercises:
+            # for now every answer comes from the solutions, so say so instead of "I can't solve this one yet"
+            self.answers.library_needed()
             return False
         self._note("")
         self._turns += 1

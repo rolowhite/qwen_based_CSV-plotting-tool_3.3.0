@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
-from . import ollama
+from . import lookup, ollama
 
 Box = Tuple[float, float, float, float]      # left, top, right, bottom in image pixels
 PDF_DPI = 150                                # the page picture shown in the Notebook
@@ -94,6 +94,8 @@ def parse(raw: str) -> Reading:
             raise ollama.OllamaError("The reading model sent a problem without its text.")
         label = p.get("label") if isinstance(p.get("label"), str) else ""
         markdown = table_rules(line_breaks(p["markdown"]).strip())
+        if label.strip() and lookup.leading_label(markdown) == lookup.leading_label(label):
+            markdown = lookup._LABEL.sub("", markdown, count=1).lstrip(" .:")      # "1.31 Consider ..." (asked without)
         key = " ".join(markdown.split())
         if markdown and key not in seen:          # the model sometimes lists the one problem twice
             seen.add(key)

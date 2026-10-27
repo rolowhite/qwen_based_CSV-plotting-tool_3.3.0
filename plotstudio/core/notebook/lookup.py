@@ -38,8 +38,10 @@ _TEX_CMD = re.compile(r"\\[A-Za-z]+")
 _MENTION = re.compile(r"\b(?:Exercises?|Ex\.)\s*\d+\.\d+(?:\s*(?:and|,|–|-)\s*\d+\.\d+)*", re.I)
 _REF = re.compile(r"(\d+)\.(\d+)")
 _LABEL = re.compile(r"^\s*(?:\*\*)?(?:(?:Exercise|Ex\.?|Problem)\s*)?(\d{1,2})\.(\d{1,3})\b(?!\.\d)", re.I)
-# 20,000 is one number, but inside a list written without spaces ("33,56,122,83") the commas separate values
-_NUMBER = re.compile(r"(?<![\w.])(-?(?:(?<!\d,)\d{1,3}(?:,\d{3})+(?!,\d)|\d+)(?:\.\d+)?|-?\.\d+)(?:\s*/\s*(\d+))?"
+# 20,000 is one number, but inside a list written without spaces ("33,56,122,83") the commas separate values.
+# A subscript counts ($x_2$ like $x_{2}$); a letter before a digit hides it (x2). "1/4" is a fraction, "102 / 83"
+# is two values (the library separates table rows with " / ").
+_NUMBER = re.compile(r"(?<![A-Za-z0-9.])(-?(?:(?<!\d,)\d{1,3}(?:,\d{3})+(?!,\d)|\d+)(?:\.\d+)?|-?\.\d+)(?:/(\d+))?"
                      r"(?![\w])")
 _WORD = re.compile(r"[a-z]+")
 

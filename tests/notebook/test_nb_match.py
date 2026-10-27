@@ -1,4 +1,6 @@
 """A problem is answered from the library only when it is surely that exercise with the same numbers."""
+from collections import Counter
+
 import pytest
 
 import nb_fixtures as fx
@@ -23,6 +25,17 @@ def test_one_changed_number_is_not_given_the_stored_answer(index):
     assert index.lookup(MARBLES.replace("7 red", "8 red")).status == "match"     # the words still match ...
     assert library_match.match(index, MARBLES.replace("7 red", "8 red")) is None   # ... the numbers don't
     assert library_match.match(index, MARBLES + " Use 3 draws.") is None
+
+
+def test_a_book_page_that_says_more_than_the_library_still_matches_with_its_printed_number(index):
+    # the page shows the label and says more than the stored problem; the stored solution uses 0.3182
+    page = MARBLES + " Give $P$ to four places, like $0.3182$."
+    assert library_match.match(index, page) is None                          # no printed number: exact only
+    assert library_match.match(index, page, label="1.1").number == "1.1"
+    assert library_match.match(index, "1.1 " + page).number == "1.1"
+    assert library_match.match(index, page, label="1.2") is None             # another printed number
+    assert library_match.match(index, MARBLES + " Use 3 draws.", label="1.1") is None     # 3: not in the solution
+    assert library_match.match(index, MARBLES.replace("7 red", "8 red"), label="1.1") is None   # 7 is missing
 
 
 def test_an_exercise_without_its_own_problem_text_is_never_used(index):
@@ -59,6 +72,10 @@ def test_math_written_differently_keeps_the_same_numbers():
     assert library_match.problem_numbers("at −15 and −10") == library_match.problem_numbers("at -15 and -10")
     assert lookup.numbers("101,94,33,56,122,83") == ["101", "94", "33", "56", "122", "83"]
     assert lookup.numbers("20,000 parts and 1,234,567 more") == ["20000", "1234567"]
+    # from real screenshots: the library's " / " between table rows (1.21), braced subscripts (12.62)
+    assert lookup.numbers("98 102 / 83 55") == ["98", "102", "83", "55"] and lookup.numbers("1/4") == ["1/4", "0.25"]
+    assert library_match.problem_numbers("$x_2$ and $x_{2}$") == Counter({"2": 2})
+    assert library_match.problem_numbers("as in Exercise 1.28; see Exercise 1.28") == Counter({"ex1.28": 1})
     # the library writes \le1 and \pm0.0100, a model writes \le 1 and \pm 0.0100
     assert library_match.problem_numbers(r"$0\le y\le1$, $2.4\pm0.0100$") == \
         library_match.problem_numbers(r"$0 \le y \le 1$, $2.4 \pm 0.0100$")
