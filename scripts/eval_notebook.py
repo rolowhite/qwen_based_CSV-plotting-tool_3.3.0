@@ -116,6 +116,8 @@ def main(argv=None):
     ap.add_argument("--model", default="")
     ap.add_argument("--browser", default="")
     ap.add_argument("--out", default=str(Path.home() / ".csv_plot_studio" / "notebook" / "eval"))
+    ap.add_argument("--resume", action="store_true", help="keep the results in --out and do only the rest")
+    ap.add_argument("--max", type=int, default=0, help="stop after this many new exercises (0: no limit)")
     args = ap.parse_args(argv)
     if not args.library:
         raise SystemExit("Pass --library (or set NOTEBOOK_LIBRARY) to your solutions file or folder.")
@@ -132,8 +134,20 @@ def main(argv=None):
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     print(f"{len(sample)} of {len(pool)} exercises with a Problem block and a checker line; model {model} {caps}")
-    rows, skipped = [], []
+    rows, skipped, done_now = [], [], 0
+    saved = out / "eval_notebook.json"
+    if args.resume and saved.is_file():
+        old = json.loads(saved.read_text(encoding="utf-8"))
+        if (old.get("seed"), old.get("n"), old.get("model")) != (args.seed, len(sample), model):
+            raise SystemExit("The saved results are for another --seed, --n or model: run without --resume.")
+        rows, skipped = old["rows"], old.get("skipped", [])
+    done = {r["exercise"] for r in rows} | {s["exercise"] for s in skipped}
     for i, e in enumerate(sample, 1):
+        if e.key in done:
+            continue
+        if args.max and done_now >= args.max:
+            break
+        done_now += 1
         try:
             clean = draw(browser, problem_text(e), out / f"{e.number}-clean.png")
         except (subprocess.SubprocessError, OSError) as exc:     # the browser, not the Notebook: skip, say so
