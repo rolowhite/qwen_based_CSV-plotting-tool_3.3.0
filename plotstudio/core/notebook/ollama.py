@@ -87,14 +87,17 @@ def pick(found: Sequence[Tuple[str, Sequence[str]]], need: str, wanted: str = ""
     return wanted if wanted in able else (able[0] if able else None)
 
 
-def prepare_image(image) -> str:
-    """A PIL image as base64 PNG, its long side scaled into LONG_SIDE_MIN..LONG_SIDE_MAX pixels."""
+def sent_size(long_side: int) -> int:
+    """The long side, in pixels, a picture is sent with."""
+    return min(max(long_side, LONG_SIDE_MIN), LONG_SIDE_MAX)
+
+
+def prepare_image(image, long_side: Optional[int] = None) -> str:
+    """A PIL image as base64 PNG, its long side scaled to `long_side` (default: into LONG_SIDE_MIN..MAX)."""
     from PIL import Image
 
     image = image.convert("RGB")
-    long_side = max(image.size)
-    k = LONG_SIDE_MAX / long_side if long_side > LONG_SIDE_MAX else LONG_SIDE_MIN / long_side \
-        if long_side < LONG_SIDE_MIN else 1.0
+    k = (long_side or sent_size(max(image.size))) / max(image.size)
     if k != 1.0:
         image = image.resize((max(1, round(image.width * k)), max(1, round(image.height * k))), Image.LANCZOS)
     buf = io.BytesIO()
