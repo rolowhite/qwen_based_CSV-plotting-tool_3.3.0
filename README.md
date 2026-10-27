@@ -586,6 +586,12 @@ alongside the local model, with the same calculator.
 * **Who may use it:** you must be 18 or older. The free tier isn't for users in the EU, the UK or Switzerland.
 * **Where the key lives:** only in your settings file, `~/.csv_plot_studio.json`, unencrypted.
 * **Without a key** everything works offline.
+* **Free limits, as measured on 2026-10-27:** each free model allows **20 requests a day**, and a new problem
+  takes about 2–4. That is roughly 5–10 problems per model per day. `gemini-3.8-flash`, the best free model, was
+  mostly "in high demand" (503) or stalled.
+* **How the app copes:** a model that is busy, rate-limited or used up is skipped (until Google's reset time) and
+  the next free one (`gemini-3.6-flash`, then `gemini-3.5-flash-lite`) is used. A solve that runs out partway
+  starts over on the next model. Gemini gets at most 90 s after the local model has its answer.
 
 Every turn is logged in `~/.csv_plot_studio/notebook/notebook_history.jsonl`: what was read, both solutions with
 their calculator calls, whether they agreed, and which was shown. The key is never logged.
@@ -594,6 +600,18 @@ Measured with `python scripts/eval_notebook.py --live --n 20 --no-gemini` (the l
 the stored solutions' results): the local model alone solved 16 of 20 (80%; one of them is an answer in words,
 checked by hand), with a median of 48 s per problem. The misses were a 4-variable regression and a long t-test
 (stopped by the time limit), a misunderstood question, and one normal approximation done another way.
+
+With a free Gemini key, the first 10 of those problems scored as follows:
+
+| | Right | Notes |
+|---|---|---|
+| What's shown | 8/10 | median 85 s per problem |
+| qwen alone | 8/9 | |
+| Gemini alone | 5/8 | `gemini-3.6-flash` / `gemini-3.5-flash-lite` |
+
+The two solvers agreed 5 times and disagreed twice, and both re-checked answers were right. Ten problems are too
+few to rank the models, and automatic scoring is unreliable where a method choice changes the number: on one
+t-test, Gemini first matched the book's pooled t (0.70), then switched to the Welch t after the re-check.
 
 Formulas are drawn with matplotlib's mathtext, after a small rewrite for what mathtext lacks: `\le`, `\tfrac`,
 `\frac12`, `\boxed` and the like. `cases` and matrices are laid out cell by cell. A formula it still can't draw is
