@@ -274,14 +274,14 @@ def _follow_up(markdown: str, problem: str, log: List[dict]) -> str:
 
 
 def solve(backend, problem: str, image=None, cancelled: Callable[[], bool] = lambda: False,
-          context: str = "") -> Solution:
+          context: str = "", system: str = SYSTEM) -> Solution:
     """Work `problem` (Markdown) out with `backend`; every number from the calculator, checked once.
     `context` is reference text the problem relies on (the exercises it mentions)."""
     start = time.perf_counter()
     prompt = f"Solve this statistics problem.\n\n{problem}"
     if context:
         prompt += f"\n\nThe problem refers to other exercises; this is what they say:\n\n{context}"
-    backend.begin(SYSTEM, prompt, image)
+    backend.begin(system, prompt, image)
     texts, log = [], []
     _rounds(backend, texts, log, cancelled)
     markdown = "\n\n".join(texts).strip()

@@ -222,10 +222,10 @@ def test_no_ollama_shows_how_to_set_it_up_and_typing_still_works(app):
 
 
 @pytest.mark.built_in
-def test_the_walpole_solutions_come_with_the_app(app):
+def test_the_built_in_solutions_come_with_the_app(app):
     from plotstudio.core.notebook import library
     nb = _ready(app, "http://127.0.0.1:9")                    # empty settings: nothing was ever chosen
-    assert len(nb.library.exercises) == 1207 and {e.book for e in nb.library.exercises} == {"walpole"}
+    assert len(nb.library.exercises) == 1207 + 327 and {e.book for e in nb.library.exercises} == {"walpole", "lind"}
     problem = library.load([library.BUILT_IN]).get("3.14").problem_md.replace("**Problem:**", "").strip()
     nb.submit(nb_session().Source("Typed", text=problem))
     _wait(app, lambda: nb._turn is None)
@@ -271,3 +271,18 @@ def test_stop_ends_a_slow_reading(app):
 def nb_session():
     from plotstudio.core.notebook import session
     return session
+
+
+def test_a_wrong_fast_answer_is_corrected_later_without_blocking_the_next_problem(app):
+    coin = "A fair coin is tossed 10 times. Find the probability of exactly 3 heads."
+    wrong = [{"text": "**Given:** n=10.", "calls": ["comb(10, 4) / 2**10"]}, "**Answer:** 0.205078125"]
+    right = [{"text": "**Given:** n=10.", "calls": ["comb(10, 3) / 2**10"]}, "**Answer:** 0.1171875"]
+    with FakeOllama({"vl": ["completion", "vision", "tools"]}, replies=wrong + right) as fake:
+        nb = _ready(app, fake.url)
+        nb.submit(nb_session().Source("Typed", text=coin))
+        _wait(app, lambda: nb._turn is None)
+        assert "0.205078125" in nb.answers.plain_text()                      # shown first, fast
+        _wait(app, lambda: "Correction for the problem" in nb.answers.plain_text(), 30)
+    text = nb.answers.plain_text()
+    assert "sorry" in text and "0.1171875" in text and nb._checks == [] and nb._checker is None
+    assert not app.errors

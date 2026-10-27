@@ -577,6 +577,14 @@ Notebook opens, so the first picture doesn't wait for it. A problem that is not 
 Gemini key, whichever solver finishes first is used and the other gets only 30 s (Gemini) or 90 s (local) to
 cross-check, instead of waiting minutes for the local model. A stored answer is shown in about a second.
 
+**Re-checked in the background.** A stored answer is shown as it is (it was worked and checked when the library was
+written). An answer that came from one solver alone, or from a library problem whose numbers differed from the
+stored one, is solved again afterwards, independently, on the other solver (Gemini when you added a key and it isn't
+busy, else the local model). If the re-check is calculator-backed and its result is different, the Solution pane
+gets a **Correction** that apologises and gives the right solution; if it agrees, nothing is added. Re-checks run only
+while nothing else is going on: sending the next problem stops the running one and puts it back in line. A re-check
+by the same local model can repeat its own mistake, so a Correction is a second opinion, not a proof.
+
 When a problem has fewer than two telling numbers (only "Exercise 1.1", 0, 1 or 2), it also needs the printed
 exercise number or nearly the same words, so another question about the same exercise is never given its answer.
 When a first reading doesn't match, the picture is read once more at another size.

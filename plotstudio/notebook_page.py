@@ -34,7 +34,7 @@ GUTTER = 12
 THUMB = 240             # px: the long side of the picture in a bubble
 STREAM = object()       # marks a streamed event in the job queue (the job isn't finished yet)
 LIBRARY_FILES = nb_library.BUILT_IN_FILES    # the solutions every answer comes from (for now); tests swap in their own
-OWN_PROGRESS = {"setup", "warm"}                  # jobs that show their own progress bar, not the header's busy bar
+OWN_PROGRESS = {"setup", "warm", "verify"}                  # jobs that show their own progress bar, not the header's busy bar
 GEMINI_NOTICE = ("Gemini (Google) then solves new problems alongside the model on this computer, and its solution "
                  "is shown. The problem's text and picture are sent to Google for that. With a free key, Google may "
                  "use what you send to improve its products and people at Google may read it, so don't send anything "
@@ -119,6 +119,11 @@ class AnswerView(tk.Frame):
         """End the answer being streamed with what has arrived (after Stop)."""
         if self._live is not None:
             self.end(self._live[1])
+
+    def add_correction(self, markdown):
+        """An answer that arrives later (the background re-check found a mistake), as a finished answer."""
+        self._live = None
+        self._add(["answer", markdown, True])
 
     def setup(self, message):
         self._live = None
@@ -440,6 +445,9 @@ class NotebookPage(ttk.Frame):
         g = px(GUTTER)
         self.library = None
         self._warmed = set()
+        self._checks = []          # answers waiting for their background re-check
+        self._checker = None       # the Checker running now, and the answer it is re-checking
+        self._checking = None
         self.index = None
         self.pdf = None             # open PdfDoc in the page picker
         self.pdf_index = 0
@@ -985,6 +993,7 @@ class NotebookPage(ttk.Frame):
             self._note("The built-in solutions couldn't be read (see the message on the right).", "Error.TLabel")
             return False
         self._note("")
+        self._stop_checking()                      # a new problem comes first: the re-checks go on afterwards
         self._turns += 1
         self._bubble(self._turns, source.name, picture, source.text)
         self.answers.add_turn(self._turns)
@@ -1015,6 +1024,9 @@ class NotebookPage(ttk.Frame):
         if turn is not None:
             self._gemini_state(turn)
         if error is None:
+            if turn is not None:
+                self._checks.extend(turn.pending)
+                self._check_next()
             return
         self.answers.finish()           # keep what had arrived, drawn
         if isinstance(error, (ollama.Cancelled, gemini.Cancelled)):
@@ -1028,6 +1040,38 @@ class NotebookPage(ttk.Frame):
         else:
             log_error("Notebook: a turn failed", error)
             self.answers.note(f"Something went wrong: {type(error).__name__}: {error}", "error")
+
+    # --------------------------------------------------------------------------------------- re-checks --
+    def _check_next(self):
+        """Re-solve the next shown-fast answer in the background, only while nothing else is going on."""
+        if self._turn is not None or self._checker is not None or not self._checks:
+            return
+        cfg, pending = self.app.cfg, self._checks.pop(0)
+        self._checker, self._checking = session.Checker(
+            self._url(), self.model_var.get(), cfg.get("notebook_gemini_key") or "",
+            cfg.get("notebook_gemini_model") or "", self._gemini_url()), pending
+        checker = self._checker
+        self.set_status("Re-checking an earlier answer…")
+        self._run("verify", lambda: checker.check(pending), self._checked)
+
+    def _checked(self, verdict, error):
+        self._checker, self._checking = None, None
+        if error is not None:
+            if not isinstance(error, (ollama.Cancelled, gemini.Cancelled)):
+                log_error("Notebook: the background re-check failed", error)      # nothing to tell the user
+        elif verdict.correction:
+            self.answers.add_correction(verdict.correction)
+        if self._turn is None:
+            self.set_status("A correction was added below." if error is None and verdict.correction else "")
+        self._check_next()
+
+    def _stop_checking(self):
+        """A re-check never delays a new problem: stop it now and put its answer back first in line."""
+        self._token["verify"] = self._token.get("verify", 0) + 1       # its result, if it still comes, is ignored
+        if self._checker is not None:
+            self._checker.cancel()
+            self._checks.insert(0, self._checking)
+        self._checker, self._checking = None, None
 
     def _gemini_state(self, turn):
         """After a turn: what the Model menu says about Gemini, and the one-time tip to add a key."""
@@ -1120,6 +1164,8 @@ class NotebookPage(ttk.Frame):
 
     def new_chat(self):
         self.stop()
+        self._stop_checking()
+        self._checks.clear()
         self._token["turn"] = self._token.get("turn", 0) + 1     # results of a stopped turn are ignored
         self._turn = None
         self._busy(False)

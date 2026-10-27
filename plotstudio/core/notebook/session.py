@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
-from . import gemini, library_match, lookup, ollama, reader, solver
+from . import gemini, library_match, lookup, ollama, reader, solver, verify
 
 NOTHING = "I couldn't find a problem in this picture. Try a sharper picture, or mark just the problem."
 PACE = 0.03              # seconds between streamed pieces
@@ -83,6 +83,7 @@ class Turn:
         self.match = match              # False: always solve (the live eval), the library still gives context
         self.gemini_problem = None      # why Gemini didn't help this turn (the page shows it in the Model menu)
         self._backends = []
+        self.pending: List[verify.Pending] = []     # answers worth re-checking in the background once this turn is done
         self._found = None              # ollama.models(), once per turn
         self._said_reading = False
         self._notes = {}                # problem text -> which number was read differently from the library's
@@ -110,9 +111,15 @@ class Turn:
                         markdown += f"\n\n*Matched to Exercise {exercise.number} of {exercise.book.title()} by its " \
                                     f"number and wording; one number differs ({note}). Check it against your page.*"
                         info["note"] = note
+                        self.pending.append(verify.Pending(problem.label, problem.markdown, exercise.solution_md,
+                                                           "library", self.source.image, self._context(problem.markdown)))
                 else:
                     shown, info = self._solve(emit, problem)
                     markdown = shown.markdown
+                    if len(info["solutions"]) == 1:      # nobody cross-checked it: worth a second, independent look
+                        self.pending.append(verify.Pending(problem.label, problem.markdown, markdown,
+                                                           info["solutions"][0]["solver"], self.source.image,
+                                                           self._context(problem.markdown)))
                 self._stream(emit, answer_markdown(problem, markdown, unreadable), problem, info)
             return [a["answer"] for a in self.answers]
         except BaseException as exc:
@@ -353,3 +360,35 @@ class Turn:
                 fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
         except OSError as exc:      # the history is a convenience: never lose the answer over it
             logging.getLogger("plotstudio").error("Couldn't write the Notebook history %s: %s", self.log_path, exc)
+
+
+class Checker(Turn):
+    """Solves a Pending answer again, independently, on the solver that did NOT give it (Gemini when it has a key
+    and isn't busy, else the local model). Run with `check(pending)` in a worker; `cancel()` stops it."""
+
+    def __init__(self, url: str = ollama.DEFAULT_URL, wanted_model: str = "", gemini_key: str = "",
+                 gemini_model: str = "", gemini_base: str = gemini.BASE_URL):
+        super().__init__(Source("re-check"), None, url, wanted_model, gemini_key=gemini_key,
+                         gemini_model=gemini_model, gemini_base=gemini_base)
+
+    def _backend(self, by: str):
+        gem = self._gemini_backend() if by != "gemini" else None
+        if gem is not None and gem.busy_until.get(gem.model, 0) < time.time():
+            return gem, True            # Gemini also sees the picture
+        qwen, why = self._qwen()
+        if qwen is None:
+            raise why
+        return qwen, False
+
+    def check(self, pending: verify.Pending) -> verify.Verdict:
+        backend, with_picture = self._backend(pending.by)
+        self._backends = [backend]
+        timer = threading.Timer(SOLVE_BUDGET, backend.cancel)       # a looping model is stopped, as in a turn
+        timer.daemon = True
+        timer.start()
+        try:
+            solution = solver.solve(backend, pending.problem, pending.image if with_picture else None,
+                                    lambda: self.chat.cancelled, pending.context, verify.SYSTEM)
+        finally:
+            timer.cancel()
+        return verify.judge(pending, solution)
