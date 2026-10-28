@@ -39,7 +39,7 @@ from .engine import LabelSettings, StyleSettings, build_plot, run_plot
 from .graphs import GRAPH_BY_ID
 from .ideas import Dot, show_error, short
 from .log import log_error
-from .paper import apply_dark_paper
+from .paper import apply_paper
 from .theme import C, CODE
 from .widgets import AutoScrollbar, PlaceholderEntry, ScrollFrame, Tooltip, release_canvas
 
@@ -1107,8 +1107,7 @@ class FeatureLabView(tk.Frame):
             width_in = min(6.0, max(2.6, self._plot_space() / fig.dpi))
             fig.set_size_inches(width_in, max(2.2, min(3.4, width_in * 0.66)))
             fit_titles(fig, width_in)
-            if self.page.plot_view.paper_var.get():
-                apply_dark_paper(fig)
+            apply_paper(fig, self.page.plot_view.paper_var.get(), self.app.theme.ink)
             canvas = FigureCanvasTkAgg(fig, master=self.preview)
             # A fixed-size picture: the preview draws it again itself when its width changes, so matplotlib's own
             # resize handler (which would draw every plot a second time as soon as it is shown) is not needed.

@@ -232,6 +232,44 @@ def _axes(ax, p, fig_face=None):
                 _text(t, p["text"])
 
 
+# the dark paper of the ink style: the same roles, on the ink style's cooler dark card (theme.INK_DARK["panel"])
+INK_PAPER = {**PAPER, "face": "#1c2026", "axes": "#1c2026", "axes_raised": "#232830", "grid": "#2b313a",
+             "spine": "#4b535e", "text": "#c9ced6", "title": "#eef1f5", "light": "#d4d8de",
+             "legend_face": "#232830", "legend_edge": "#3b424c"}
+MAJOR = {"light": "#d5dce4", "dark": "#343b45"}      # graph paper: the grid lines ...
+MINOR = {"light": "#e8ecf1", "dark": "#262c34"}      # ... and the faint lines between them
+
+
+def apply_graph_paper(fig, dark: bool = False):
+    """The ink style's graph paper: faint minor lines between the major grid lines, on plain number axes that
+    already show a grid (not on category, date or log axes, heatmaps or 3D). Only how the app shows the figure."""
+    from matplotlib.ticker import AutoLocator, AutoMinorLocator, MaxNLocator
+    for ax in fig.axes:
+        if getattr(ax, "name", "") != "rectilinear":
+            continue
+        for which, axis in (("x", ax.xaxis), ("y", ax.yaxis)):
+            if axis.get_scale() != "linear" or type(axis.get_major_locator()) not in (AutoLocator, MaxNLocator):
+                continue
+            if not any(line.get_visible() for line in axis.get_gridlines()):
+                continue
+            look = "dark" if dark else "light"
+            axis.set_minor_locator(AutoMinorLocator(5))
+            ax.grid(True, which="major", axis=which, color=MAJOR[look])
+            ax.grid(True, which="minor", axis=which, color=MINOR[look], linewidth=0.5)
+            ax.tick_params(axis=which, which="minor", length=0)
+        ax.set_axisbelow(True)
+    return fig
+
+
+def apply_paper(fig, dark: bool, ink: bool = False):
+    """What the app does to every figure it shows: dark paper when it is on, and graph paper in the ink style."""
+    if dark:
+        apply_dark_paper(fig, INK_PAPER if ink else PAPER)
+    if ink:
+        apply_graph_paper(fig, dark)
+    return fig
+
+
 def apply_dark_paper(fig, p: dict = PAPER):
     """Recolour a finished figure for dark paper (in place)."""
     fig_face = to_rgba(fig.patch.get_facecolor())

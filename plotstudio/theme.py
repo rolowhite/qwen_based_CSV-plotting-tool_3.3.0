@@ -119,6 +119,32 @@ DARK = {
 }
 
 PALETTES = {"light": LIGHT, "dark": DARK}
+
+# The "Ink on graph paper" style (Figma proposal): every control is one ink, so the coral accent no longer looks
+# like the orange of a plot's second series; layered cool surfaces; the same status colours. Same keys as above.
+INK_LIGHT = {**LIGHT,
+    "bg": "#f3f5f7", "bg_hover": "#e7ebf0", "panel": "#ffffff", "card_hover": "#f9fafb", "raised": "#eef1f4",
+    "hover": "#e9edf2", "pressed": "#dde2e9", "field": "#fdfdfe", "border": "#d9dfe7", "border_strong": "#c6ced9",
+    "border_dark": "#aab4c2", "input_border": "#7d8798", "text": "#1a2230", "muted": "#4e596a", "faint": "#5f697b",
+    "accent": "#17202c", "accent_hover": "#2b3646", "accent_pressed": "#0e151e", "accent_soft": "#e6eaf0",
+    "accent_line": "#bcc5d1", "accent_disabled": "#aab2bf", "accent_disabled_fg": "#f3f5f7", "on_accent": "#ffffff",
+    "focus_ring": "#17202c", "select": "#e1e7ee", "stripe": "#f8f9fb", "heading": "#f1f3f6",
+    "heading_hover": "#e8ebf0", "scroll": "#c2c9d3", "scroll_hover": "#98a2b1", "track": "#d9dfe7",
+    "switch_off": "#c4cbd5", "tip_bg": "#17202c", "btn_fg": "#1a2230",
+}
+INK_DARK = {**DARK,
+    "bg": "#14171c", "bg_hover": "#1f242b", "panel": "#1c2026", "card_hover": "#21262d", "raised": "#252a31",
+    "hover": "#2a3038", "pressed": "#323943", "field": "#171a1f", "border": "#2e343d", "border_strong": "#3b424c",
+    "border_dark": "#4b535e", "input_border": "#6f7885", "text": "#eceff3", "muted": "#a6aeba", "faint": "#8f98a5",
+    "accent": "#e6eaf0", "accent_hover": "#ffffff", "accent_pressed": "#cfd5dd", "accent_soft": "#2a313b",
+    "accent_line": "#46505c", "accent_disabled": "#4a525d", "accent_disabled_fg": "#9aa2ad", "on_accent": "#14171c",
+    "focus_ring": "#e6eaf0", "select": "#313844", "stripe": "#1a1e23", "heading": "#1b1f25",
+    "heading_hover": "#262b33", "scroll": "#474e59", "scroll_hover": "#636b77", "track": "#3b424c",
+    "check_mark": "#14171c", "switch_off": "#46505c", "knob": "#f4f6f8", "tip_bg": "#2b313a", "tip_fg": "#f2f4f6",
+    "btn_fg": "#eceff3",
+}
+STYLES = {"default": PALETTES, "ink": {"light": INK_LIGHT, "dark": INK_DARK}}
+HALO_MS = {"default": (90, 130), "ink": (60, 80)}      # the click halo: strong, then faint (ink: 140 ms in all)
 C = dict(LIGHT)
 
 # The "Python code" tab keeps its own colours in both looks.
@@ -147,16 +173,18 @@ SPACE = {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 20, "xxl": 24, "xxxl": 32}
 # Tcl helpers: the short halo after a click (states user1 -> user2 -> normal)
 _TCL = r"""
 namespace eval ::studio {}
+set ::studio::t1 90
+set ::studio::t2 130
 proc ::studio::flash {w} {
     if {![winfo exists $w] || [$w instate disabled]} { return }
     catch { after cancel [set ::studio::job($w)] }
     $w state {user1 !user2}
-    set ::studio::job($w) [after 90 [list ::studio::flash2 $w]]
+    set ::studio::job($w) [after $::studio::t1 [list ::studio::flash2 $w]]
 }
 proc ::studio::flash2 {w} {
     if {![winfo exists $w]} { return }
     $w state {!user1 user2}
-    set ::studio::job($w) [after 130 [list ::studio::flash3 $w]]
+    set ::studio::job($w) [after $::studio::t2 [list ::studio::flash3 $w]]
 }
 proc ::studio::flash3 {w} {
     catch { unset ::studio::job($w) }
@@ -177,11 +205,12 @@ def _pick(root, names, fallback):
 
 
 class Theme:
-    def __init__(self, root: tk.Tk, mode: str = "light"):
+    def __init__(self, root: tk.Tk, mode: str = "light", style: str = "default"):
         self.root = root
         self.mode = mode if mode in PALETTES else "light"
+        self.style = style if style in STYLES else "default"
         C.clear()
-        C.update(PALETTES[self.mode])
+        C.update(STYLES[self.style][self.mode])
         try:
             dpi = root.winfo_fpixels("1i")
         except tk.TclError:
@@ -278,6 +307,10 @@ class Theme:
     def dark(self) -> bool:
         return self.mode == "dark"
 
+    @property
+    def ink(self) -> bool:
+        return self.style == "ink"
+
     def px(self, n) -> int:
         return int(round(n * self.scale))
 
@@ -311,14 +344,16 @@ class Theme:
     # ------------------------------------------------------------------ #
     # switching the look
     # ------------------------------------------------------------------ #
-    def apply(self, mode: str):
-        """Switch to the light or dark look, live."""
-        if mode not in PALETTES or mode == self.mode:
+    def apply(self, mode: str, style: str = None):
+        """Switch to the light or dark look (and/or the default or ink style), live."""
+        style = self.style if style is None else style
+        if mode not in PALETTES or style not in STYLES or (mode, style) == (self.mode, self.style):
             return
         old = dict(C)
-        self.mode = mode
+        self.mode, self.style = mode, style
         C.clear()
-        C.update(PALETTES[mode])
+        C.update(STYLES[style][mode])
+        self._halo_timing()
         self._options()
         self._styles()
         self._recolor_tree(old)
@@ -450,6 +485,7 @@ class Theme:
         root.bind_class("TCombobox", "<FocusIn>", clear_selection, add="+")
         try:
             root.tk.eval(_TCL)
+            self._halo_timing()
             old = root.tk.eval("bind TButton <ButtonRelease-1>")
             if "studio::release" not in old:
                 root.tk.eval("bind TButton <ButtonRelease-1> {::studio::release %W\n" + old + "}")
@@ -458,6 +494,13 @@ class Theme:
                 if old and "studio::flash" not in old:
                     root.tk.eval(f"bind TButton {seq} " + "{::studio::flash %W\n" + old + "}")
         except tk.TclError:   # the halo is decoration; never fail because of it
+            pass
+
+    def _halo_timing(self):
+        try:
+            first, second = HALO_MS[self.style]
+            self.root.tk.eval(f"set ::studio::t1 {first}; set ::studio::t2 {second}")
+        except tk.TclError:
             pass
 
     # ------------------------------------------------------------------ #

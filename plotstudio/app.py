@@ -48,7 +48,7 @@ from . import bootstrap  # noqa: E402
 from .limits import fmt_limit, fracs, is_full, limit_values, to_value  # noqa: E402
 from .navigate import WHEEL_ZOOM, Navigator, zoom_fracs  # noqa: E402
 from . import recommend  # noqa: E402
-from .paper import apply_dark_paper  # noqa: E402
+from .paper import apply_paper  # noqa: E402
 from .theme import C, CODE, Theme  # noqa: E402
 from .tracker import PointTracker  # noqa: E402
 from .widgets import (AutoScrollbar, MultiPicker, PlaceholderEntry, RangeSlider, ScrollFrame, Section,  # noqa: E402
@@ -94,7 +94,7 @@ class App(tk.Tk):
         self.withdraw()
         self.title(APP_NAME)
         self.cfg = settings.load()
-        self.theme = Theme(self, mode=self.cfg.get("ui_theme", "dark"))
+        self.theme = Theme(self, mode=self.cfg.get("ui_theme", "dark"), style=self.cfg.get("ui_style", "default"))
         recommend.SYMBOLS["eta"] = self.theme.glyph("η", "eta")   # some Linux Tk fonts have no Greek
         recommend.SYMBOLS["rho"] = self.theme.glyph("ρ", "rho")
         self.dataset = None
@@ -199,6 +199,19 @@ class App(tk.Tk):
         if hasattr(self, "profile"):
             self.profile.on_theme()
 
+    def toggle_style(self):
+        """Switch between the default style and the ink style (live, remembered for next time)."""
+        style = "default" if self.theme.ink else "ink"
+        self.busy(True)
+        try:
+            self.theme.apply(self.theme.mode, style)
+        finally:
+            self.busy(False)
+        self.cfg["ui_style"] = style
+        settings.save(self.cfg)
+        if hasattr(self, "profile"):
+            self.profile.on_theme()
+
     def show(self, name):
         if name != self.current:
             self.previous_page = self.current
@@ -296,14 +309,27 @@ class Thumbs:
     def get(self, gid, large=None):
         large = self.large_default if large is None else large
         folder = "thumbs_dark" if self.root.theme.dark and (ASSETS / "thumbs_dark").is_dir() else "thumbs"
-        key = (gid, large, folder)
+        recolor = folder == "thumbs_dark" and self.root.theme.ink
+        key = (gid, large, folder, recolor)
         if key not in self.cache:
             name = f"{gid}@2x.png" if large else f"{gid}.png"
             try:
-                self.cache[key] = tk.PhotoImage(master=self.root, file=str(ASSETS / folder / name))
-            except tk.TclError:
+                if recolor:     # the dark pictures sit on the default dark card: move them to the ink card
+                    self.cache[key] = self._on_ink_card(ASSETS / folder / name)
+                else:
+                    self.cache[key] = tk.PhotoImage(master=self.root, file=str(ASSETS / folder / name))
+            except (tk.TclError, OSError):
                 self.cache[key] = None
         return self.cache[key]
+
+    def _on_ink_card(self, path):
+        import numpy as np
+        from PIL import Image, ImageTk
+        from .paper import INK_PAPER, PAPER
+        img = np.array(Image.open(path).convert("RGBA"))
+        old, new = (np.array(Image.new("RGB", (1, 1), c).getpixel((0, 0))) for c in (PAPER["face"], INK_PAPER["face"]))
+        img[(img[..., :3] == old).all(axis=-1), :3] = new
+        return ImageTk.PhotoImage(Image.fromarray(img), master=self.root)
 
 
 def theme_button(parent, app, style="Toggle.TButton"):
@@ -317,6 +343,27 @@ def theme_button(parent, app, style="Toggle.TButton"):
     btn = ttk.Button(parent, text=text, image=image, compound="left", style=style, command=app.toggle_theme)
     btn.on_theme = lambda: btn.configure(**dict(zip(("text", "image"), look())))
     Tooltip(btn, "Switch between the light and the dark look. The plot's colours follow the graph paper.")
+    # the style switch sits just left of the header's other right-hand buttons, added after them so none moves
+    btn.after_idle(lambda: btn.winfo_exists() and _place_style_button(btn, app, style))
+    return btn
+
+
+def _place_style_button(theme_btn, app, style):
+    info = {k: v for k, v in theme_btn.pack_info().items() if k != "in"}
+    style_button(theme_btn.master, app, style).pack(**info)
+
+
+def style_button(parent, app, style="Toggle.TButton"):
+    """A small button that switches between the default style and the ink style (graph paper)."""
+    t = app.theme
+
+    def label():
+        return "Default style" if t.ink else "New style"
+
+    btn = ttk.Button(parent, text=label(), style=style, command=app.toggle_style)
+    btn.on_theme = lambda: btn.configure(text=label())
+    Tooltip(btn, "Switch between the app's default style and the new ink style (ink controls, graph paper "
+                 "under the plots). Everything else stays the same.")
     return btn
 
 
@@ -2333,8 +2380,7 @@ class PlotView(tk.Frame):
         if self.other is not None:
             self.other.destroy()
             self.other = None
-        if self.paper_var.get():
-            apply_dark_paper(fig)
+        apply_paper(fig, self.paper_var.get(), self.app.theme.ink)
         self.fig = fig
         self.inches = tuple(fig.get_size_inches())
         self.base_dpi = fig.dpi
@@ -2613,8 +2659,7 @@ class PopoutWindow(tk.Toplevel):
             messagebox.showerror(APP_NAME, exc.message, parent=app)
             return
         view = app.work.plot_view
-        if view.paper_var.get():
-            apply_dark_paper(fig)
+        apply_paper(fig, view.paper_var.get(), app.theme.ink)
         self.fig = fig
         w, h = (int(v * fig.dpi) for v in fig.get_size_inches())  # open at the figure's natural size
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()

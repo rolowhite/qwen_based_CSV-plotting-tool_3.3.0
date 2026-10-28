@@ -21,9 +21,9 @@ matplotlib.use("Agg")
 
 from plotstudio import fonts  # noqa: E402
 from plotstudio.engine import STUDIO_COLORS, StyleSettings, studio_rc  # noqa: E402
-from plotstudio.paper import PAPER, STUDIO_DARK, apply_dark_paper  # noqa: E402
+from plotstudio.paper import INK_PAPER, PAPER, STUDIO_DARK, apply_dark_paper, apply_paper  # noqa: E402
 from plotstudio.skin import draw_icon, grow, shape, ICONS  # noqa: E402
-from plotstudio.theme import DARK, LIGHT  # noqa: E402
+from plotstudio.theme import DARK, INK_DARK, INK_LIGHT, LIGHT, STYLES, WIDGET_BG_KEYS, WIDGET_FG_KEYS  # noqa: E402
 
 failures = []
 
@@ -68,7 +68,7 @@ PAIRS = [
 
 
 def test_contrast():
-    for name, pal in (("light", LIGHT), ("dark", DARK)):
+    for name, pal in (("light", LIGHT), ("dark", DARK), ("ink light", INK_LIGHT), ("ink dark", INK_DARK)):
         for fg, bg, need in PAIRS:
             ratio = contrast(pal[fg], pal[bg])
             check(ratio >= need, f"{name}: {fg} on {bg} is {ratio:.2f}:1, needs {need}:1")
@@ -76,6 +76,30 @@ def test_contrast():
 
 def test_dark_paper_matches_cards():
     check(PAPER["face"].lower() == DARK["panel"].lower(), "dark graph paper = dark card colour")
+    check(INK_PAPER["face"].lower() == INK_DARK["panel"].lower(), "ink dark graph paper = ink dark card colour")
+
+
+def test_every_style_has_every_role_once():
+    # the live switch traces a widget's colour back to its role: within a palette each role's colour is unique
+    for style, looks in STYLES.items():
+        for mode, pal in looks.items():
+            check(set(pal) == set(LIGHT), f"{style} {mode}: same roles as the default light look")
+            for keys in (WIDGET_BG_KEYS, WIDGET_FG_KEYS):
+                values = [pal[k].lower() for k in keys]
+                check(len(set(values)) == len(values), f"{style} {mode}: widget colours are unique per role")
+
+
+def test_graph_paper_adds_minor_lines_only_to_number_axes_with_a_grid():
+    import matplotlib.pyplot as plt
+    fig, (a, b) = plt.subplots(1, 2)
+    a.plot([0, 1, 2], [3, 1, 2]); a.grid(True)
+    b.bar(["x", "y"], [1, 2]); b.grid(True, axis="y")
+    apply_paper(fig, dark=False, ink=True)
+    fig.canvas.draw()
+    check(all(t.tick1line.get_markersize() == 0 for t in a.xaxis.get_minor_ticks()), "no minor tick marks")
+    check(len(a.yaxis.get_minorticklocs()) > 0 and len(b.xaxis.get_minorticklocs()) == 0,
+          "minor lines on the number axes, none on the category axis")
+    plt.close(fig)
 
 
 def test_studio_palette():

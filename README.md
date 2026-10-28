@@ -371,6 +371,12 @@ too, and in the pop-out window. The ball is never saved into images.
 **View menu** (above the plot): *Fit the plot to the window* (off = real size with scrollbars, useful for big pair
 plots), mouse move and zoom, the value ball, the range sliders and the dark graph paper.
 
+**Default style / New style.** The button beside Dark / Light switches between the app's default style and the new
+*ink on graph paper* style (from the Figma proposal): every control is one ink instead of coral, so sliders and the Plot
+button no longer look like the orange of a plot's second line; surfaces are cooler; plots get faint graph-paper lines
+between their grid lines; the click halo is a little quicker. Nothing moves and every tool works the same in both; the
+choice is remembered (`ui_style` in the settings). Click **Default style** to go back.
+
 **Dark / Light.** The button at the top switches the whole window between the light and the dark look; the choice
 is remembered. In the dark look the plot is shown on dark graph paper: background, grid, axes and text change,
 and the data keep their colours, except that black/grey helper lines become light grey and the eight Studio colours

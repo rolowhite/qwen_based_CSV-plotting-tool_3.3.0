@@ -285,3 +285,39 @@ if __name__ == "__main__":
             func()
     print(f"\n{'ALL OK' if not failures else f'{len(failures)} FAILURE(S)'}")
     sys.exit(1 if failures else 0)
+
+
+def test_the_style_switch_keeps_every_control_where_it_is_and_switches_back(tmp_path, monkeypatch):
+    import json
+    import tkinter as tk
+    try:
+        tk.Tk().destroy()
+    except tk.TclError:
+        import pytest
+        pytest.skip("no display")
+    import plotstudio.settings as settings
+    from plotstudio.theme import C, INK_DARK, DARK
+    monkeypatch.setattr(settings, "PATH", tmp_path / ".csv_plot_studio.json")
+    settings.PATH.write_text(json.dumps({"ui_theme": "dark"}), encoding="utf-8")
+    from plotstudio.app import App
+    app = App()
+    try:
+        app.update()
+        buttons = [w for w in _walk(app) if w.winfo_class() == "TButton" and w.winfo_ismapped()]
+        before = {str(w): (w.winfo_rootx(), w.winfo_rooty()) for w in buttons if w.cget("text") not in ("New style", "Default style")}
+        style = next(w for w in _walk(app) if w.winfo_class() == "TButton" and w.cget("text") == "New style")
+        style.invoke(); app.update()
+        assert app.theme.ink and C["panel"] == INK_DARK["panel"] and style.cget("text") == "Default style"
+        after = {str(w): (w.winfo_rootx(), w.winfo_rooty()) for w in buttons if str(w) in before}
+        assert after == before                                  # nothing moved
+        assert json.loads(settings.PATH.read_text(encoding="utf-8"))["ui_style"] == "ink"
+        style.invoke(); app.update()
+        assert not app.theme.ink and C["panel"] == DARK["panel"]   # and back to the default style
+    finally:
+        app.destroy()
+
+
+def _walk(w):
+    yield w
+    for child in w.winfo_children():
+        yield from _walk(child)

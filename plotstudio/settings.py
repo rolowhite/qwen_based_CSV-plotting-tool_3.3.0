@@ -16,6 +16,7 @@ DEFAULTS = {
     "dpi": "150 dpi",
     "style_open": False,
     "ui_theme": "dark",          # light | dark
+    "ui_style": "default",       # default | ink (the graph-paper style)
     "show_values": True,         # ball + value under the mouse
     "range_sliders": True,       # X/Y range sliders around the plot
     "mouse_nav": True,           # drag to move, wheel to zoom
