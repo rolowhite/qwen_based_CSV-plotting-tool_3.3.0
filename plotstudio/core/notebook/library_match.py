@@ -65,7 +65,8 @@ def differences(read: Counter, exercise: Exercise) -> str:
     return f"read {', '.join(a)}, the book has {', '.join(b)}" if a or b else ""
 
 
-def match_with_note(index: lookup.Index, markdown: str, label: str = "") -> Tuple[Optional[Exercise], str]:
+def match_with_note(index: lookup.Index, markdown: str, label: str = "",
+                    prefer: str = "") -> Tuple[Optional[Exercise], str]:
     """The library exercise for this problem, or None; the note says which number was read differently (or '').
 
     A candidate from the lookup's top 3 may be used only if it has its own **Problem:** text and
@@ -102,6 +103,8 @@ def match_with_note(index: lookup.Index, markdown: str, label: str = "") -> Tupl
     if len(same) > 1:
         named = [c for c in same if c.exercise.number == printed]
         same = named or same
+        liked = [c for c in same if prefer and c.exercise.book == prefer]
+        same = liked if len(liked) == 1 else same        # the user's own book breaks a tie between two books
         if len(same) > 1 and same[0].score - same[1].score < lookup.MARGIN:
             return None, ""
     if not same:
@@ -110,6 +113,6 @@ def match_with_note(index: lookup.Index, markdown: str, label: str = "") -> Tupl
     return found, ("" if problem_numbers(found.problem_md) == numbers else differences(numbers, found))
 
 
-def match(index: lookup.Index, markdown: str, label: str = "") -> Optional[Exercise]:
+def match(index: lookup.Index, markdown: str, label: str = "", prefer: str = "") -> Optional[Exercise]:
     """The library exercise for this problem, or None (see match_with_note)."""
-    return match_with_note(index, markdown, label)[0]
+    return match_with_note(index, markdown, label, prefer)[0]

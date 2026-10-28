@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2          # 2: each exercise carries its chapter's table rules and formulas
 # the solutions that come with the app (Walpole 9th edition chapters 1-18, Lind 15th edition chapters 8-12); only read
 _NOTEBOOK_ASSETS = Path(__file__).resolve().parents[2] / "assets" / "notebook"
 BUILT_IN = _NOTEBOOK_ASSETS / "Walpole_All_Chapters_Solutions.md"
@@ -45,6 +45,8 @@ class Exercise:
     caution_note: str = ""          # the ⚠ lines' text
     table_refs: Tuple[str, ...] = ()
     title: str = ""                 # "Monty Hall" from "### Exercise 2.102 (Monty Hall)"
+    tables: str = ""                # the chapter's "How tables were used" paragraph (the book's rounding and table rules)
+    conventions: str = ""           # the chapter's "Conventions" block: its formulas, as Markdown bullets
     source_file: str = ""
     line: int = 0                   # 1-based line of the ### heading
 
@@ -148,7 +150,7 @@ def _note_text(line: str, mark: str) -> str:
     return re.sub(r"^Checker(?: note)?:\s*", "", text)
 
 
-def _exercise(meta, chapter, topic, number, title, body, path, line) -> Exercise:
+def _exercise(meta, chapter, topic, number, title, body, path, line, notes=None) -> Exercise:
     problem, rest = _split_problem(body)
     checks, cautions, kept = [], [], []
     for text in rest:
@@ -166,7 +168,8 @@ def _exercise(meta, chapter, topic, number, title, body, path, line) -> Exercise
                     edition=meta.get("edition", ""), chapter=chapter, number=number, topic=topic,
                     problem_md=problem, solution_md="\n".join(kept).strip("\n"),
                     checker_note=" ".join(checks), caution_note=" ".join(cautions), table_refs=tables,
-                    title=title or "", source_file=str(path), line=line)
+                    title=title or "", source_file=str(path), line=line,
+                    tables=(notes or {}).get("tables", ""), conventions=(notes or {}).get("conventions", ""))
 
 
 def parse_text(text: str, path="<text>") -> Tuple[List[Exercise], List[LoadProblem]]:
@@ -181,12 +184,15 @@ def parse_text(text: str, path="<text>") -> Tuple[List[Exercise], List[LoadProbl
     chapter, topic = None, ""
     current = None          # (number, title, line, topic, body lines)
     seen = {}
+    notes: Dict[int, dict] = {}         # chapter -> {"tables": ..., "conventions": ...} from its opening lines
+    collecting = None                   # "conventions" while its bullet lines go on
 
     def close():
         if current is None:
             return
         number, title, line, at_topic, body = current
-        ex = _exercise(meta, int(number.split(".")[0]), at_topic, number, title, body, path, line)
+        ex = _exercise(meta, int(number.split(".")[0]), at_topic, number, title, body, path, line,
+                       notes.get(int(number.split(".")[0])))
         if not ex.problem_md:
             problems.append(LoadProblem(str(path), line, f"Exercise {number} has no **Problem:** block; "
                                                          "its solution text is matched instead"))
@@ -220,6 +226,16 @@ def parse_text(text: str, path="<text>") -> Tuple[List[Exercise], List[LoadProbl
             continue
         if current is not None:
             current[4].append(line)
+        elif chapter is not None:               # a chapter's opening lines, before its first exercise
+            if collecting and (line.startswith("- ") or line.startswith("  ")):
+                notes[chapter]["conventions"] += "\n" + line
+                continue
+            collecting = None
+            if line.startswith("**How tables were used:**"):
+                notes.setdefault(chapter, {})["tables"] = line[len("**How tables were used:**"):].strip()
+            elif line.startswith("**Conventions"):
+                notes.setdefault(chapter, {})["conventions"] = line
+                collecting = "conventions"
     close()
     if not exercises:
         problems.append(LoadProblem(str(path), 0, "no '### Exercise N.M' headings found"))

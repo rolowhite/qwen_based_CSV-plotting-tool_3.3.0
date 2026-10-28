@@ -577,6 +577,27 @@ Notebook opens, so the first picture doesn't wait for it. A problem that is not 
 Gemini key, whichever solver finishes first is used and the other gets only 30 s (Gemini) or 90 s (local) to
 cross-check, instead of waiting minutes for the local model. A stored answer is shown in about a second.
 
+**Type just an exercise number.** `9.5`, `lind 9.5` or `walpole 9.5` answers that exercise at once. When both books
+have the number the Notebook asks which one (a button each) and remembers your book (`notebook_book` in the settings),
+which then settles the next shared number and breaks ties between the books when a problem could be from either.
+
+**What a stored answer tells you.** Under each library solution: where in the book it is from (edition, chapter,
+section), the check note (*Matches Lind Appendix C ...*), the book's caution when there is one, the chapter's formulas,
+and the next exercises of the section (type a number to solve one).
+
+**Answers that match the back of the book.** Each chapter's table rules (for example Lind: *z* to 2 decimals from
+Appendix B.1, *t* to 3 decimals from B.2) and formulas come with the solutions and are given to the solver for a
+problem near that chapter, which has the printed tables as calculator functions: `ztable(z)`, `zcrit(0.975)`,
+`tcrit(0.025, 14)` (`dist(...)` stays the exact value). The solver gives the book's value, and the exact one after it.
+
+**Quick solutions.** A confidence interval or test of one or two means or proportions (paired too) that asks for one
+thing is solved in seconds: the local model only copies the given numbers (every copied number must stand in the
+problem, or the full solver takes over), and Python does every step with the books' table values and writes the
+solution in the books' notation, with the book's *p*-value for *z* tests. It is checked in the background like any
+fast answer. About half of Lind's problems pass the first filter (the rest ask several lettered parts, a comment or a
+finite population, and go to the full solver). ANOVA, two proportions and data lists other than paired differences are
+not in it.
+
 **More than one problem in a picture.** The Notebook lists them with a **Solve** button each (for example 4.9, 4.10 and
 4.11) and solves the one you pick. When Tesseract can split the picture's numbered problems and every one is in the
 library, the list appears without the vision model reading anything.

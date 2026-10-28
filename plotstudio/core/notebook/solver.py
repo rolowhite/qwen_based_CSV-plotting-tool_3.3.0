@@ -37,6 +37,9 @@ SYSTEM = """You are a statistics tutor writing a worked solution on a board.
   n=successes in the population, N=draws), not the book's N, k, n. For example
   dist('binom', 'pmf', 3, n=10, p=0.5), dist('norm', 'cdf', 1.96, loc=0, scale=1), dist('t', 'ppf', 0.975, df=14).
   Use dist for distribution values instead of printed tables.
+  The textbooks' printed tables, to match the answer in the back of the book: ztable(z) is the area between 0 and z
+  (z rounded to 2 decimals, area to 4), zcrit(0.975) is the z with that area to its left (1.96), tcrit(0.025, 14)
+  is the t table's value for upper-tail area 0.025 (3 decimals). dist(...) gives the exact value.
   Matrices are lists of rows: det(M), inv(M), matmul(A, B), transpose(M), and ols(X, y) for least squares (X has a
   column of 1s for the intercept), all exact; corr(xs, ys); integrate('3*x**-4', 1, inf) integrates an expression in x.
 - Write math as LaTeX in $...$ or $$...$$.
@@ -286,7 +289,7 @@ def _follow_up(markdown: str, problem: str, log: List[dict]) -> str:
 
 def solve(backend, problem: str, image=None, cancelled: Callable[[], bool] = lambda: False,
           context: str = "", system: str = SYSTEM, example: str = "",
-          progress: Optional[Callable[[int], None]] = None) -> Solution:
+          progress: Optional[Callable[[int], None]] = None, rules: str = "") -> Solution:
     """Work `problem` (Markdown) out with `backend`; every number from the calculator, checked once.
     `context` is reference text the problem relies on (the exercises it mentions); `example` a solved problem of
     the book that is close to this one (its method may be followed, its numbers are not this problem's)."""
@@ -294,6 +297,10 @@ def solve(backend, problem: str, image=None, cancelled: Callable[[], bool] = lam
     prompt = f"Solve this statistics problem.\n\n{problem}"
     if context:
         prompt += f"\n\nThe problem refers to other exercises; this is what they say:\n\n{context}"
+    if rules:
+        prompt += ("\n\nThis problem is from a textbook. Follow its table rules and notation, so the answer matches "
+                   "the back of the book. When the book rounds a table value, give the book's value as the answer and "
+                   f"the exact value after it, like 0.4750 (exact: 0.47500).\n\n{rules}")
     if example:
         prompt += ("\n\nA similar problem from the same book, already solved. Follow its METHOD if it fits; its numbers "
                    f"are not this problem's, so take every number from calculate:\n\n{example}")

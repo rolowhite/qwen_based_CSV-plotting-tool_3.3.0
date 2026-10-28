@@ -324,3 +324,18 @@ def test_check_again_solves_it_again_and_says_so(app):
         nb.recheck(answer)
         _wait(app, lambda: "Checked again: I get the same answer." in nb.answers.plain_text(), 30)
     assert not app.errors
+
+
+@pytest.mark.built_in
+def test_typing_a_number_asks_which_book_once_and_then_remembers_it(app):
+    nb = _ready(app, "http://127.0.0.1:9")
+    nb.submit(nb_session().Source("Typed", text="9.5"))               # both books have an Exercise 9.5
+    _wait(app, lambda: nb._turn is None)
+    buttons = {b.cget("text"): b for b in _buttons(nb.answers._windows[-1])}
+    assert set(buttons) == {"Solve Lind 9.5", "Solve Walpole 9.5"}
+    buttons["Solve Lind 9.5"].invoke()
+    _wait(app, lambda: nb._turn is None and "Next in this section" in nb.answers.plain_text())
+    assert app.cfg["notebook_book"] == "lind" and "Problem Lind 9.5." in nb.answers.plain_text()
+    nb.submit(nb_session().Source("Typed", text="9.6"))               # no question this time
+    _wait(app, lambda: nb._turn is None and "Problem Lind 9.6." in nb.answers.plain_text())
+    assert not app.errors

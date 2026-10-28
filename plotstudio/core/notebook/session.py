@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 from . import cache as answer_cache
-from . import gemini, library_match, lookup, ollama, reader, solver, verify
+from . import footer, gemini, library_match, lookup, ollama, quick, reader, solver, verify
 
 NOTHING = "I couldn't find a problem in this picture. Try a sharper picture, or mark just the problem."
 PACE = 0.03              # seconds between streamed pieces
@@ -33,6 +33,20 @@ SOLVE_BUDGET = 180       # s each solver may take for one problem (a looping or 
 GEMINI_GRACE = 90        # s Gemini may go on after the local model has its answer, before that one is used
 QWEN_GRACE = 30          # s the local model may go on after Gemini has its answer (usually first), to cross-check it
 STREAM_MAX = 1.2         # s at most to show a stored or finished answer: the words are only paced, never waited for
+
+
+# "9.5", "lind 9.5", "Exercise 9.5 walpole": the user names an exercise instead of showing it
+_REFERENCE = re.compile(r"^\s*(?:(?P<b1>lind|walpole)\b[\s:,.-]*)?(?:ex(?:ercise)?\.?\s*)?(?P<n>\d{1,2}\.\d{1,3})"
+                        r"\s*(?:(?:in|from|of)?\s*(?P<b2>lind|walpole))?\s*\??\s*$", re.I)
+
+
+def reference(text: str, need_book: bool = False):
+    """(book or '', '9.5') when the text only names an exercise, else None. `need_book`: only 'lind 9.5' counts."""
+    m = _REFERENCE.match(text or "")
+    if m is None or (need_book and not (m.group("b1") or m.group("b2"))):
+        return None
+    major, minor = m.group("n").split(".")
+    return (m.group("b1") or m.group("b2") or "").lower(), f"{int(major)}.{int(minor)}"
 
 
 @dataclass
@@ -72,8 +86,11 @@ class Turn:
     def __init__(self, source: Source, index=None, url: str = ollama.DEFAULT_URL, wanted_model: str = "",
                  log_path: Optional[Path] = None, pace: Optional[float] = None, gemini_key: str = "",
                  gemini_model: str = "", gemini_base: str = gemini.BASE_URL, match: bool = True,
-                 cache: Optional[answer_cache.Cache] = None, prerender: Optional[Callable[[str], None]] = None):
+                 cache: Optional[answer_cache.Cache] = None, prerender: Optional[Callable[[str], None]] = None,
+                 prefer: str = ""):
         self.source = source
+        self.prefer = prefer            # the user's book ("lind"): it breaks a tie between two books
+        self._missing = ""              # why no exercise was found, when a typed number named none
         self.cache = cache              # verified live answers and readings, remembered between turns
         self.prerender = prerender      # draws an answer's formulas in the background before it streams in
         self.choices: List[Tuple[str, str]] = []
@@ -111,11 +128,12 @@ class Turn:
             if self.source.image is not None and len(problems) > 1:
                 # one picture, several problems: the user says which one, then it is solved (the page asks)
                 self.choices = [(p.label, p.markdown) for p in problems]
+            if self.choices:
                 emit(("choose", self.choices))
                 return []
             emit(("status", "Solving…"))
             if not problems:
-                self._stream(emit, NOTHING, None, {"from": "none"})
+                self._stream(emit, self._missing or NOTHING, None, {"from": "none"})
             trusted = []
             for problem, exercise in zip(problems, hits):
                 cached = None
@@ -125,7 +143,8 @@ class Turn:
                     markdown, info = cached["markdown"], {"from": "cache", "by": cached["by"]}
                     trusted.append(True)
                 elif exercise is not None:
-                    markdown, info = exercise.solution_md, {"from": f"library:{exercise.key}", "by": "library"}
+                    markdown, info = exercise.solution_md, {"from": f"library:{exercise.key}", "by": "library",
+                                                            "solution": exercise.solution_md}
                     trusted.append(True)
                     note = self._notes.get(problem.markdown)
                     if note:        # a blurred digit may be why a number differs: say so, the page is the judge
@@ -135,10 +154,16 @@ class Turn:
                         trusted[-1] = False
                         self.pending.append(verify.Pending(problem.label, problem.markdown, exercise.solution_md,
                                                            "library", self.source.image, self._context(problem.markdown)))
+                    if self.index is not None:      # where it is from, what to watch out for, the formulas, what is next
+                        markdown += footer.book_footer(exercise, self.index.library)
                 else:
-                    shown, info = self._solve(emit, problem)
-                    markdown = shown.markdown
-                    info["by"] = "gemini" if shown.model.startswith("gemini") else "qwen"
+                    got = self._quick(problem)
+                    if got is not None:
+                        markdown, info = got
+                    else:
+                        shown, info = self._solve(emit, problem)
+                        markdown = shown.markdown
+                        info["by"] = "gemini" if shown.model.startswith("gemini") else "qwen"
                     trusted.append(info["agree"] is True)
                     if self.cache is not None:       # remembered; shown again only once two solvers or a re-check agree
                         self.cache.remember(problem.markdown, markdown, info["by"], info["agree"] is True)
@@ -146,7 +171,7 @@ class Turn:
                         self.pending.append(verify.Pending(problem.label, problem.markdown, markdown,
                                                            info["solutions"][0]["solver"], self.source.image,
                                                            self._context(problem.markdown)))
-                info["solution"] = markdown
+                info.setdefault("solution", markdown)
                 self._stream(emit, answer_markdown(problem, markdown, unreadable), problem, info)
             if self.cache is not None and self.source.image is not None and problems and all(trusted):
                 self.cache.remember_reading(self.source.digest(), [[p.label, p.markdown] for p in problems])
@@ -161,7 +186,7 @@ class Turn:
     def _match(self, problem: reader.Problem):
         if self.index is None or not self.match:
             return None
-        exercise, note = library_match.match_with_note(self.index, problem.markdown, problem.label)
+        exercise, note = library_match.match_with_note(self.index, problem.markdown, problem.label, self.prefer)
         if note:
             self._notes[problem.markdown] = note
         return exercise
@@ -175,7 +200,7 @@ class Turn:
         if self.index is None:
             return ""
         best = self.index.lookup(text).best
-        book = best.exercise.book if best is not None and best.score >= lookup.LOW else None
+        book = best.exercise.book if best is not None and best.score >= lookup.LOW else (self.prefer or None)
         found = []
         for token in dict.fromkeys(t for t in lookup.numbers(text) if t.startswith("ex")):
             exercise = self.index.library.get(token[2:], book)
@@ -184,8 +209,30 @@ class Turn:
         return "\n\n".join(found)[:6000]
 
     def _typed(self):
+        ref = reference(self.source.text) or reference(self.source.label, need_book=True)
+        if ref is not None and self.index is not None:
+            return self._named(*ref)
         problem = reader.Problem(self.source.label, self.source.text.strip())
         return [problem], [self._match(problem)]
+
+    def _named(self, book: str, number: str):
+        """The user typed an exercise number ("9.5", "lind 9.5"): answer it, or ask which book when two have it."""
+        found = self.index.library.all_with_number(number)
+        books = sorted({e.book for e in self.index.library.exercises})
+        if book:
+            found = [e for e in found if e.book == book]
+        elif len(found) > 1 and any(e.book == self.prefer for e in found):
+            found = [e for e in found if e.book == self.prefer]
+        if not found:
+            where = book.title() if book else " or ".join(b.title() for b in books)
+            self._missing = f"I don't have Exercise {number} of {where} among my solutions."
+            return [], []
+        texts = [(f"{e.book.title()} {e.number}", e.problem_md.replace("**Problem:**", "", 1).strip() or
+                  f"Exercise {e.number}") for e in found]
+        if len(found) > 1:
+            self.choices = texts
+            return [], []
+        return [reader.Problem(*texts[0])], found
 
     def _models(self):
         """Ollama's models, asked once a turn (each one costs a request for its capabilities)."""
@@ -281,6 +328,35 @@ class Turn:
             return None
         return solver.GeminiBackend(gemini.Gemini(key, base), model or gemini.MODELS[0], gemini.MODELS)
 
+    def _quick(self, problem: reader.Problem):
+        """A confidence interval or a test of one or two means or proportions: the local model only copies the givens
+        and Python solves it (seconds). (markdown, info) like a solve, or None for the full solver."""
+        if not self.match or not quick.candidate(problem.markdown):
+            return None
+        backend, _ = self._qwen()
+        if backend is None:
+            return None
+        start = time.perf_counter()
+        self._backends = [backend]
+        found = quick.solve(backend, problem.markdown)
+        if found is None:
+            return None
+        seconds = round(time.perf_counter() - start, 1)
+        answer = solver.answer_text(found.markdown)
+        return found.markdown, {"from": f"quick:{found.kind}", "by": "quick", "agree": None, "rechecked": False,
+                                "errors": {}, "example": "", "solutions": [
+                                    {"solver": "quick", "model": "quick", "seconds": seconds, "checked": True,
+                                     "answer": answer, "tool_log": [], "markdown": found.markdown}]}
+
+    def _rules(self, problem: reader.Problem) -> str:
+        """The table rules and formulas of the chapter the closest library problem is in (the book's rounding)."""
+        if self.index is None or not self.match:
+            return ""
+        best = self.index.lookup(f"{problem.label} {problem.markdown}").best
+        if best is None or best.score < lookup.LOW:
+            return ""
+        return "\n\n".join(x for x in (best.exercise.tables, best.exercise.conventions) if x)[:2500]
+
     def _example(self, problem: reader.Problem):
         """A library problem close to this one in wording (but not the same: it didn't match), with its worked
         solution, for the solver to follow the method of. (No example when matching is off: the eval would leak.)"""
@@ -305,6 +381,7 @@ class Turn:
         finished = queue.Queue()        # who answers first sets the pace; the other gets only a short grace
         context = self._context(problem.markdown)
         example, example_key = self._example(problem)
+        rules = self._rules(problem)
 
         def progress(name):
             def tell(count):
@@ -317,7 +394,7 @@ class Turn:
                 used[name] = backend
                 try:
                     results[name] = solver.solve(backend, problem.markdown, image, cancelled, context,
-                                                 example=example, progress=progress(name))
+                                                 example=example, progress=progress(name), rules=rules)
                 except gemini.GeminiError as exc:
                     # out of today's quota mid-solve: once more from the start on the next free model
                     fresh = solver.GeminiBackend(backend.client, backend.model, gemini.MODELS) \
@@ -326,7 +403,7 @@ class Turn:
                         raise
                     used[name] = fresh
                     results[name] = solver.solve(fresh, problem.markdown, image, cancelled, context,
-                                                 example=example, progress=progress(name))
+                                                 example=example, progress=progress(name), rules=rules)
             except BaseException as exc:  # noqa: BLE001 - kept: the other solver may still answer
                 results[name] = exc
             finally:

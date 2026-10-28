@@ -3234,10 +3234,10 @@ Part 2 — Problems:
 **How tables were used:** Standard normal areas and critical values follow Lind Appendix B.1 (area between $0$ and $z$, with $z$ rounded to 2 decimal places), and Student's $t$ critical values and $p$-value bounds follow Lind Appendix B.2, alongside exact `scipy.stats` $p$-values in the checker notes.
 
 **Conventions (Lind §§10.1–10.10):**
-- One-sample $z$-test for a population mean ($\sigma$ known) [10–1]: $z = rac{ar{X} - \mu}{\sigma / \sqrt{n}}$.
-- One-sample $t$-test for a population mean ($\sigma$ unknown) [10–2]: $t = rac{ar{X} - \mu}{s / \sqrt{n}}$ with $df = n - 1$.
-- One-sample $z$-test for a population proportion [10–3]: $z = rac{p - \pi}{\sqrt{\pi(1-\pi)/n}}$ when $n\pi \ge 5$ and $n(1-\pi) \ge 5$.
-- Type II error $z$-score [10–4]: $z = rac{ar{X}_c - \mu_1}{\sigma / \sqrt{n}}$.
+- One-sample $z$-test for a population mean ($\sigma$ known) [10–1]: $z = \frac{\bar{X} - \mu}{\sigma / \sqrt{n}}$.
+- One-sample $t$-test for a population mean ($\sigma$ unknown) [10–2]: $t = \frac{\bar{X} - \mu}{s / \sqrt{n}}$ with $df = n - 1$.
+- One-sample $z$-test for a population proportion [10–3]: $z = \frac{p - \pi}{\sqrt{\pi(1-\pi)/n}}$ when $n\pi \ge 5$ and $n(1-\pi) \ge 5$.
+- Type II error $z$-score [10–4]: $z = \frac{\bar{X}_c - \mu_1}{\sigma / \sqrt{n}}$.
 
 ---
 
@@ -4786,14 +4786,11 @@ $$z = \frac{0.3500 - .40}{\sqrt{.40(.60)/80}} = \frac{-.0500}{.05477} = -0.91, \
 **How tables were used:** Standard normal areas and critical values follow Lind Appendix B.1, and Student's $t$ critical values follow Lind Appendix B.2 (with Welch degrees of freedom rounded down to an integer per formula [11–8]), alongside exact `scipy.stats` $p$-values in the checker notes.
 
 **Conventions (Lind §§11.1–11.6):**
-- Two-sample $z$-test for independent means ($\sigma_1, \sigma_2$ known) [11–2]: $z = rac{ar{X}_1 - ar{X}_2}{\sqrt{\sigma_1^2/n_1 + \sigma_2^2/n_2}}$.
-- Two-sample $z$-test for proportions [11–3, 11–4]: $p_c = rac{X_1 + X_2}{n_1 + n_2}$ and $z = rac{p_1 - p_2}{\sqrt{p_c(1-p_c)/n_1 + p_c(1-p_c)/n_2}}$.
-- Pooled two-sample $t$-test ($\sigma_1 = \sigma_2$ unknown) [11–5, 11–6]: $s_p^2 = rac{(n_1-1)s_1^2 + (n_2-1)s_2^2}{n_1+n_2-2}$ and $t = rac{ar{X}_1 - ar{X}_2}{\sqrt{s_p^2(1/n_1 + 1/n_2)}}$ with $df = n_1 + n_2 - 2$.
-- Unequal-variance two-sample $t$-test ($\sigma_1 
-eq \sigma_2$ unknown) [11–7, 11–8]: $t = rac{ar{X}_1 - ar{X}_2}{\sqrt{s_1^2/n_1 + s_2^2/n_2}}$ with $df = \left\lfloor rac{(s_1^2/n_1 + s_2^2/n_2)^2}{rac{(s_1^2/n_1)^2}{n_1-1} + rac{(s_2^2/n_2)^2}{n_2-1}} 
-ight
-floor$.
-- Paired $t$-test for dependent samples [11–9]: $t = rac{ar{d}}{s_d / \sqrt{n}}$ with $df = n - 1$.
+- Two-sample $z$-test for independent means ($\sigma_1, \sigma_2$ known) [11–2]: $z = \frac{\bar{X}_1 - \bar{X}_2}{\sqrt{\sigma_1^2/n_1 + \sigma_2^2/n_2}}$.
+- Two-sample $z$-test for proportions [11–3, 11–4]: $p_c = \frac{X_1 + X_2}{n_1 + n_2}$ and $z = \frac{p_1 - p_2}{\sqrt{p_c(1-p_c)/n_1 + p_c(1-p_c)/n_2}}$.
+- Pooled two-sample $t$-test ($\sigma_1 = \sigma_2$ unknown) [11–5, 11–6]: $s_p^2 = \frac{(n_1-1)s_1^2 + (n_2-1)s_2^2}{n_1+n_2-2}$ and $t = \frac{\bar{X}_1 - \bar{X}_2}{\sqrt{s_p^2(1/n_1 + 1/n_2)}}$ with $df = n_1 + n_2 - 2$.
+- Unequal-variance two-sample $t$-test ($\sigma_1 \neq \sigma_2$ unknown) [11–7, 11–8]: $t = \frac{\bar{X}_1 - \bar{X}_2}{\sqrt{s_1^2/n_1 + s_2^2/n_2}}$ with $df = \left\lfloor \frac{(s_1^2/n_1 + s_2^2/n_2)^2}{\frac{(s_1^2/n_1)^2}{n_1-1} + \frac{(s_2^2/n_2)^2}{n_2-1}} \right\rfloor$.
+- Paired $t$-test for dependent samples [11–9]: $t = \frac{\bar{d}}{s_d / \sqrt{n}}$ with $df = n - 1$.
 
 ---
 
@@ -6143,11 +6140,11 @@ $$t = \frac{454.77 - 441.48}{\sqrt{2878.62(1/53 + 1/27)}} = 1.05$$
 **How tables were used:** Critical values of $F$ follow Lind Appendix B.4 (`.05` and `.01` upper-tail probabilities), and Student's $t$ critical values follow Lind Appendix B.2, alongside exact `scipy.stats` $p$-values in the checker notes.
 
 **Conventions (Lind §§12.1–12.8):**
-- Comparing two population variances [12–1]: $F = rac{s_1^2}{s_2^2}$ (larger sample variance placed in the numerator, $df_1 = n_1 - 1, df_2 = n_2 - 1$).
-- One-way ANOVA [12–2 to 12–4]: $	ext{SS total} = \sum (X - ar{X}_G)^2$, $	ext{SSE} = \sum (X - ar{X}_c)^2$, $	ext{SST} = 	ext{SS total} - 	ext{SSE}$, $F = rac{	ext{SST}/(k-1)}{	ext{SSE}/(n-k)} = rac{	ext{MST}}{	ext{MSE}}$.
-- Pairwise treatment mean confidence interval [12–5]: $(ar{X}_1 - ar{X}_2) \pm t \sqrt{	ext{MSE}(1/n_1 + 1/n_2)}$ with $df = n - k$.
-- Two-way randomized block ANOVA [12–6, 12–7]: $	ext{SSB} = k \sum (ar{X}_b - ar{X}_G)^2$ and $	ext{SSE} = 	ext{SS total} - 	ext{SST} - 	ext{SSB}$.
-- Two-way ANOVA with interaction [12–8, 12–9]: $	ext{SSI} = rac{n}{bk} \sum\sum (ar{X}_{ij} - ar{X}_{i\cdot} - ar{X}_{\cdot j} + ar{X}_G)^2$ and $	ext{SSE} = 	ext{SS total} - 	ext{SSA} - 	ext{SSB} - 	ext{SSI}$.
+- Comparing two population variances [12–1]: $F = \frac{s_1^2}{s_2^2}$ (larger sample variance placed in the numerator, $df_1 = n_1 - 1, df_2 = n_2 - 1$).
+- One-way ANOVA [12–2 to 12–4]: $\text{SS total} = \sum (X - \bar{X}_G)^2$, $\text{SSE} = \sum (X - \bar{X}_c)^2$, $\text{SST} = \text{SS total} - \text{SSE}$, $F = \frac{\text{SST}/(k-1)}{\text{SSE}/(n-k)} = \frac{\text{MST}}{\text{MSE}}$.
+- Pairwise treatment mean confidence interval [12–5]: $(\bar{X}_1 - \bar{X}_2) \pm t \sqrt{\text{MSE}(1/n_1 + 1/n_2)}$ with $df = n - k$.
+- Two-way randomized block ANOVA [12–6, 12–7]: $\text{SSB} = k \sum (\bar{X}_b - \bar{X}_G)^2$ and $\text{SSE} = \text{SS total} - \text{SST} - \text{SSB}$.
+- Two-way ANOVA with interaction [12–8, 12–9]: $\text{SSI} = \frac{n}{bk} \sum\sum (\bar{X}_{ij} - \bar{X}_{i\cdot} - \bar{X}_{\cdot j} + \bar{X}_G)^2$ and $\text{SSE} = \text{SS total} - \text{SSA} - \text{SSB} - \text{SSI}$.
 
 ---
 
@@ -6158,10 +6155,10 @@ $$t = \frac{454.77 - 441.48}{\sqrt{2878.62(1/53 + 1/27)}} = 1.05$$
 
 **Given:** $n_1 = 6$ ($df_1 = 6 - 1 = 5$), $n_2 = 4$ ($df_2 = 4 - 1 = 3$), two-tailed $\alpha = .10$ (upper-tail area $\alpha/2 = .05$).
 
-From Appendix B.4 ($lpha = .05$ table) with $df_1 = 5$ in the numerator and $df_2 = 3$ in the denominator, the critical value is:
+From Appendix B.4 ($\alpha = .05$ table) with $df_1 = 5$ in the numerator and $df_2 = 3$ in the denominator, the critical value is:
 $$F_{.05, 5, 3} = 9.01$$
 
-📘 *Table used: Lind Appendix B.4 ($lpha = .05, df_1 = 5, df_2 = 3 \implies 9.01$).*
+📘 *Table used: Lind Appendix B.4 ($\alpha = .05, df_1 = 5, df_2 = 3 \implies 9.01$).*
 
 **Answer:** $F = 9.01$.
 
@@ -6174,10 +6171,10 @@ $$F_{.05, 5, 3} = 9.01$$
 
 **Given:** $n_1 = 4$ ($df_1 = 4 - 1 = 3$), $n_2 = 7$ ($df_2 = 7 - 1 = 6$), one-tailed $\alpha = .01$.
 
-From Appendix B.4 ($lpha = .01$ table) with $df_1 = 3$ in the numerator and $df_2 = 6$ in the denominator, the critical value is:
+From Appendix B.4 ($\alpha = .01$ table) with $df_1 = 3$ in the numerator and $df_2 = 6$ in the denominator, the critical value is:
 $$F_{.01, 3, 6} = 9.78$$
 
-📘 *Table used: Lind Appendix B.4 ($lpha = .01, df_1 = 3, df_2 = 6 \implies 9.78$).*
+📘 *Table used: Lind Appendix B.4 ($\alpha = .01, df_1 = 3, df_2 = 6 \implies 9.78$).*
 
 **Answer:** $F = 9.78$.
 
@@ -6671,7 +6668,7 @@ Because both endpoints are positive (the 95% confidence intervals in the Minitab
 | Error | 600 | 48 | 12.50 | | | |
 | Total | 1000 | 59 | | | | |
 
-- **Decisions ($lpha = .05$):**
+- **Decisions ($\alpha = .05$):**
   - **Factor A:** $F = 2.00 < 2.80 \implies$ **Do not reject $H_0$** (Factor A means do not differ significantly).
   - **Factor B:** $F = 1.00 < 3.19 \implies$ **Do not reject $H_0$** (Factor B means do not differ significantly).
   - **Interaction:** $F = 4.00 > 2.30 \implies$ **Reject $H_0$** (there is a significant interaction between Factor A and Factor B).
@@ -7625,7 +7622,7 @@ $$t = \frac{0.40}{6.1137 / \sqrt{10}} = \frac{0.40}{1.9333} = 0.207$$
 | Error | 44.500 | 9 | 4.9444 | | | |
 | Total | 488.500 | 17 | | | | |
 
-- **Decisions ($lpha = .05$):**
+- **Decisions ($\alpha = .05$):**
   - **Interaction:** $F = 17.07 > 3.63$ ($p = .000$) $\implies$ **Reject $H_0$** (strong interaction between social status and school type).
   - **Social Status:** $F = 8.49 > 4.26$ ($p = .008$) $\implies$ **Reject $H_0$**.
   - **School Type:** $F = 2.26 < 4.26$ ($p = .160$) $\implies$ **Do not reject $H_0$**.

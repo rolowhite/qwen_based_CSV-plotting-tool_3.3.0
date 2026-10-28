@@ -1057,7 +1057,8 @@ class NotebookPage(ttk.Frame):
         self._turn = session.Turn(source, self.index, self._url(), self.model_var.get(), history_path(),
                                   gemini_key=cfg.get("notebook_gemini_key") or "",
                                   gemini_model=cfg.get("notebook_gemini_model") or "", gemini_base=self._gemini_url(),
-                                  cache=self.cache, prerender=self.answers.prerender)
+                                  cache=self.cache, prerender=self.answers.prerender,
+                                  prefer=cfg.get("notebook_book") or "")
         self._run("turn", self._turn.run, self._turn_done, on_event=self._turn_event)
         return True
 
@@ -1076,7 +1077,11 @@ class NotebookPage(ttk.Frame):
             self.answers.add_choice(value, self._pick)
 
     def _pick(self, label, markdown):
-        """The user chose one of a picture's problems: it is solved as typed text (no second reading)."""
+        """The user chose one of a picture's problems (or a book for a typed number): solved as typed text."""
+        book = re.match(r"(Lind|Walpole) \d", label or "")
+        if book:                    # the chosen book is remembered: it settles the next number that two books share
+            self.app.cfg["notebook_book"] = book.group(1).lower()
+            settings.save(self.app.cfg)
         self.submit(session.Source(f"Problem {label}" if label else "Problem", text=markdown, label=label))
 
     def _remember_answer(self):

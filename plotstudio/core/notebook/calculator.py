@@ -164,6 +164,32 @@ def _integrate(expression, a, b):
     return value
 
 
+def _stats():
+    from scipy import stats
+    return stats
+
+
+def _ztable(z):
+    """The area between 0 and z as a textbook's normal table prints it: z to 2 decimals, the area to 4."""
+    return round(_stats().norm.cdf(round(_real(z), 2)) - 0.5, 4)
+
+
+def _zcrit(p):
+    """The z with area p to its left, as printed (zcrit(0.975) is 1.96; 1.645 for 0.95)."""
+    p = _real(p)
+    if not 0 < p < 1:
+        raise CalcError("zcrit needs an area between 0 and 1")
+    return 1.645 if abs(p - 0.95) < 1e-12 else round(_stats().norm.ppf(p), 2)
+
+
+def _tcrit(tail, df):
+    """The t critical value as a textbook's t table prints it (3 decimals) for upper-tail area `tail`."""
+    tail = _real(tail)
+    if not 0 < tail < 1 or _real(df) < 1:
+        raise CalcError("tcrit(upper_tail_area, df) needs an area between 0 and 1 and df of at least 1")
+    return round(_stats().t.ppf(1 - tail, _real(df)), 3)
+
+
 def _corr(x, y):
     if not (isinstance(x, list) and isinstance(y, list)):
         raise CalcError("corr(x_values, y_values) needs two lists")
@@ -178,6 +204,9 @@ FUNCTIONS = {
     "ols": _ols,
     "corr": _corr,
     "integrate": _integrate,
+    "ztable": _ztable,
+    "zcrit": _zcrit,
+    "tcrit": _tcrit,
     "comb": lambda n, k: math.comb(_int_arg(n, "comb"), _int_arg(k, "comb")),
     "perm": lambda n, k=None: math.perm(_int_arg(n, "perm"), None if k is None else _int_arg(k, "perm")),
     "factorial": lambda n: math.factorial(_int_arg(n, "factorial")),
