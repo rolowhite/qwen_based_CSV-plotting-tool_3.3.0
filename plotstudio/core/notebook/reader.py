@@ -19,7 +19,7 @@ PDF_DPI = 150                                # the page picture shown in the Not
 READ_DPI = 300                               # a page is drawn again this sharp for the reader
 MAX_IMAGE_BYTES = 50 * 1024 * 1024
 # room for a big picture (~2,500 tokens) plus the reply; the cap ends a model that loops instead of answering
-OPTIONS = {"temperature": 0, "num_ctx": 8192, "num_predict": 3072}
+OPTIONS = {"temperature": 0, "num_ctx": ollama.NUM_CTX, "num_predict": 3072}
 _RULE = re.compile(r"^\s*\|?(\s*:?-{3,}:?\s*\|)*\s*:?-{3,}:?\s*\|?\s*$")       # a table's |---|---| line
 
 SCHEMA = {

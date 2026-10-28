@@ -18,7 +18,7 @@ from .gemini import Gemini, GeminiError
 
 MAX_ROUNDS = 25
 REL = 1e-3                  # numbers this close are the same answer (0.6496 vs 0.65 is, 0.6 vs 0.65 isn't)
-OLLAMA_OPTIONS = {"temperature": 0, "num_ctx": 8192, "num_predict": 4096}     # a regression's steps are long
+OLLAMA_OPTIONS = {"temperature": 0, "num_ctx": ollama.NUM_CTX, "num_predict": 4096}     # a regression's steps are long
 BUSY_WAIT = 3.0             # s before the one retry of an overloaded Gemini model in the middle of a solve
 MAX_WAIT = 60.0             # s at most for a per-minute limit before that retry
 BUSY_SKIP = 600.0           # s an overloaded Gemini model is skipped at the start of later solves
@@ -306,7 +306,11 @@ def solve(backend, problem: str, image=None, cancelled: Callable[[], bool] = lam
                    f"are not this problem's, so take every number from calculate:\n\n{example}")
     backend.begin(system, prompt, image)
     texts, log = [], []
-    _rounds(backend, texts, log, cancelled, progress)
+    try:
+        _rounds(backend, texts, log, cancelled, progress)
+    except BaseException as exc:
+        exc.partial = "\n\n".join(texts).strip()      # what was written before it stopped (a time limit)
+        raise
     markdown = "\n\n".join(texts).strip()
     if not markdown:
         raise SolverError("The solver wrote nothing.")

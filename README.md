@@ -569,8 +569,11 @@ and in one of two ways:
 
 **With or without the printed exercise number.** A picture that prints the number ("12.62") and one that doesn't both
 work: the words and numbers of the problem are enough, and the printed number settles ties (two exercises that share
-a dataset, such as Walpole 1.4 and 10.107). When the number is printed and the words agree, one number read wrongly
-(a blurred digit) still matches, and the answer says which number differs. Subscripts and exponents (`x_1` / `x1`,
+a dataset, such as Walpole 1.4 and 10.107). When the words are nearly the book's but some numbers were read differently
+(a blurred digit, or a page that says more than the stored text), the stored answer is still shown at once, with a note
+naming the numbers that differ, and the problem is solved again with the numbers that were read in the background: a
+Correction follows if that answer is different. A printed exercise number must agree. On 400 library problems with one
+digit changed and no printed number, 360 got their own stored answer (was 44) and 1 another exercise's, with the note. Subscripts and exponents (`x_1` / `x1`,
 `\chi^2`), page references ("on page 13"), soft hyphens and scientific notation (`2.56e-06` = `2.56 \times 10^{-6}`)
 no longer change the match. Measured on 400 library problems with the PDF text layer's noise added: no printed number
 0 → 90 % matched, printed number 5 % → 97 % with one digit changed, and no wrong exercise in 2,400 tries.
@@ -638,7 +641,9 @@ by step:
   of the question, the model is asked once to fix it.
 * **Context:** a problem that mentions another exercise ("the joint density of Exercise 3.40") gets that exercise's
   text from the solutions.
-* **Time limit:** a solve takes about a minute; after 3 minutes the local model is stopped.
+* **Time limit:** a solve takes about a minute; after 5 minutes the local model is stopped, and what it had worked
+  out so far is shown, marked as possibly unfinished. Every request asks Ollama for the same context size, so the model
+  is never loaded twice.
 
 **Optional: a free Gemini key for better solutions.** Use the model menu at the top, then **Gemini: add a free key…**
 (get a key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)). Gemini then solves each new problem

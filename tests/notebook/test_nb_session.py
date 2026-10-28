@@ -51,12 +51,19 @@ def test_a_hit_restates_the_problem_then_streams_the_solution(index, tmp_path):
     assert entry["stopped"] is False and entry["error"] is None and len(entry["reads"]) == 1
 
 
-def test_a_miss_reads_again_at_another_size_and_can_still_hit(index):
+def test_a_misread_digit_still_gets_the_stored_answer_and_says_so(index):
+    # the words name the exercise: its stored answer at once (no second reading, no live solving), with a note,
+    # and the problem is solved again with the numbers that were read, in the background
     misread = MARBLES.replace("7 red", "1 red")
-    with FakeOllama(MODELS, replies=[_reply(("", misread)), _reply(("", MARBLES))]) as fake:
+    with FakeOllama(MODELS, replies=[_reply(("", misread))]) as fake:
+        turn = session.Turn(session.Source("p.png", _picture()), index, fake.url, pace=0)
+        answers, events = _run(turn)
+        assert len(fake.requests) == 1
+    assert r"\mathbf{0.3182}" in answers[0] and "some numbers differ (read 1, the book has 7)" in answers[0]
+    assert [p.by for p in turn.pending] == ["library"]
+    # a reading that names no exercise is read once more (bigger), and can still hit
+    with FakeOllama(MODELS, replies=[_reply(("", "A box holds marbles.")), _reply(("", MARBLES))]) as fake:
         answers, events = _run(session.Turn(session.Source("p.png", _picture()), index, fake.url, pace=0))
-        assert len(fake.requests) == 2
-    assert "Reading it again more closely…" in [e[1] for e in events if e[0] == "status"]
     assert "**Solution.**" in answers[0] and MARBLES in answers[0]
     assert session.second_size(1200) == 1800 and session.second_size(2000) == 1333
     assert session.second_size(1500) == ollama.LONG_SIDE_MAX        # bigger, up to the cap, never smaller (a bug)
@@ -327,7 +334,7 @@ def test_the_status_counts_the_calculations_while_solving(index):
 
 
 def test_a_close_variant_of_a_library_problem_gives_the_solver_its_worked_solution(index):
-    variant = MARBLES.replace("7 red", "8 red")                          # same words, a number changed: not a match
+    variant = MARBLES.replace("7 red", "9 red").replace("5 blue", "4 blue")  # same words, other numbers: a new problem
     with FakeOllama(MODELS, replies=QWEN_SOLVES) as fake:
         turn = session.Turn(session.Source("typed", text=variant), index, fake.url, pace=0)
         _run(turn)
@@ -337,3 +344,26 @@ def test_a_close_variant_of_a_library_problem_gives_the_solver_its_worked_soluti
     with FakeOllama(MODELS, replies=QWEN_SOLVES) as fake:                 # matching off (the eval): no example
         _run(session.Turn(session.Source("typed", text=variant), index, fake.url, pace=0, match=False))
         assert "similar problem" not in fake.requests[0]["messages"][1]["content"]
+
+
+def test_a_solve_stopped_by_the_time_limit_keeps_what_it_had_written(index, monkeypatch):
+    monkeypatch.setattr(session, "SOLVE_BUDGET", 1.5)
+    slow = [{"text": "**Given:** $n=10$, $p=0.5$. Binomial:", "calls": ["comb(10, 3) / 2**10"]},
+            {"text": "So P(X=3) is ... " * 8, "delay": 1.0}]                 # the second round never finishes in time
+    with FakeOllama(MODELS, replies=slow) as fake:
+        turn = session.Turn(session.Source("typed", text=COIN), index, fake.url, pace=0)
+        answers, _ = _run(turn)
+    assert "**Given:** $n=10$" in answers[0] and "may be unfinished" in answers[0]
+    assert turn.answers[0]["solutions"][0]["checked"] is False
+
+
+def test_every_ollama_request_uses_one_context_size(index):
+    # a different num_ctx makes Ollama load the 5 GB model again: the reader, the solver, the quick way and the
+    # warm-up must all ask for the same one
+    from plotstudio.core.notebook import quick, reader, solver
+    assert reader.OPTIONS["num_ctx"] == solver.OLLAMA_OPTIONS["num_ctx"] == ollama.NUM_CTX
+    with FakeOllama(MODELS) as fake:
+        ollama.warm(fake.url, "vl")
+        assert fake.generates[-1]["options"]["num_ctx"] == ollama.NUM_CTX
+    import inspect
+    assert "OLLAMA_OPTIONS" in inspect.getsource(quick.extract)

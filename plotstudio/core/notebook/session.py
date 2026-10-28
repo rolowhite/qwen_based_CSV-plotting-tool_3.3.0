@@ -29,7 +29,7 @@ PACE = 0.03              # seconds between streamed pieces
 WORDS = 3                # words per piece
 SECOND_READ = 1.5        # the second read sends the picture this much bigger (or smaller, past the size cap)
 EXAMPLE_WORDS = 0.5      # a library problem this close in wording is shown to the solver as a worked example
-SOLVE_BUDGET = 180       # s each solver may take for one problem (a looping or stalled model is stopped)
+SOLVE_BUDGET = 300       # s each solver may take for one problem (a looping or stalled model is stopped)
 GEMINI_GRACE = 90        # s Gemini may go on after the local model has its answer, before that one is used
 QWEN_GRACE = 30          # s the local model may go on after Gemini has its answer (usually first), to cross-check it
 STREAM_MAX = 1.2         # s at most to show a stored or finished answer: the words are only paced, never waited for
@@ -61,6 +61,10 @@ class Source:
     def digest(self) -> str:
         data = self.image.tobytes() if self.image is not None else (self.text or self.name).encode("utf-8")
         return hashlib.sha256(data).hexdigest()[:16]
+
+
+def ok_names(results: dict) -> List[str]:
+    return [n for n, r in results.items() if isinstance(r, solver.Solution)]
 
 
 def second_size(first: int) -> int:
@@ -149,7 +153,9 @@ class Turn:
                     note = self._notes.get(problem.markdown)
                     if note:        # a blurred digit may be why a number differs: say so, the page is the judge
                         markdown += f"\n\n*Matched to Exercise {exercise.number} of {exercise.book.title()} by its " \
-                                    f"number and wording; one number differs ({note}). Check it against your page.*"
+                                    f"wording, but some numbers differ ({note}). Check them against your page: if " \
+                                    "your numbers are different, it is being solved again with them, and a " \
+                                    "correction follows here if the answer changes.*"
                         info["note"] = note
                         trusted[-1] = False
                         self.pending.append(verify.Pending(problem.label, problem.markdown, exercise.solution_md,
@@ -262,13 +268,13 @@ class Turn:
             text = reader.ocr_text(self.source.image)
         if not text:
             return None
+        parts = reader.split_labelled(text)         # "4.9 ... 4.10 ... 4.11 ...": several problems on one picture
+        if len(parts) > 1:
+            hits = [self._match(p) for p in parts]
+            return (parts, hits) if all(hits) else None
         problem = reader.Problem("", text)
         exercise = self._match(problem)
-        if exercise is not None:
-            return [problem], [exercise]
-        parts = reader.split_labelled(text)         # "4.9 ... 4.10 ... 4.11 ...": several problems on one picture
-        hits = [self._match(p) for p in parts]
-        return (parts, hits) if len(parts) > 1 and all(hits) else None
+        return ([problem], [exercise]) if exercise is not None else None
 
     def _read(self, emit):
         saved = self.cache.reading(self.source.digest()) if self.cache is not None and self.match else None
@@ -435,9 +441,16 @@ class Turn:
         if cut == "qwen" and isinstance(results.get("qwen"), stopped):
             results["qwen"] = solver.SolverError("stopped: Gemini had already answered")
         elif qwen is not None and qwen.chat.cancelled and isinstance(results.get("qwen"), stopped):
-            results["qwen"] = solver.SolverError(
-                f"This problem took the model on this computer more than {SOLVE_BUDGET // 60} minutes, so it was "
-                "stopped. A free Gemini key (model menu at the top) helps with long problems.")
+            partial = getattr(results["qwen"], "partial", "")
+            if partial and "gemini" not in ok_names(results):     # keep the work done so far: it is still useful
+                results["qwen"] = solver.Solution(
+                    partial + f"\n\n*Stopped after {SOLVE_BUDGET // 60} minutes, so this solution may be unfinished. "
+                    "A free Gemini key (model menu at the top) helps with long problems.*",
+                    qwen.model, [], float(SOLVE_BUDGET), checked=False)
+            else:
+                results["qwen"] = solver.SolverError(
+                    f"This problem took the model on this computer more than {SOLVE_BUDGET // 60} minutes, so it was "
+                    "stopped. A free Gemini key (model menu at the top) helps with long problems.")
         if gem is not None and gem.client.cancelled and isinstance(results.get("gemini"), stopped):
             results["gemini"] = gemini.GeminiError("Gemini took too long this time.", "busy")
         errors = {n: f"{type(r).__name__}: {r}" for n, r in results.items() if isinstance(r, BaseException)}

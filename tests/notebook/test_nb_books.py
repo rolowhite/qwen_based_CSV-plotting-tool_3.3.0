@@ -147,7 +147,8 @@ def test_the_chosen_option_is_answered_from_the_book_it_names(books):
 def test_the_closest_chapters_table_rules_go_to_the_solver(books):
     _, index = books
     e = books[0].get("9.5", "lind")
-    variant = e.problem_md.replace("**Problem:**", "", 1).replace("49", "50").replace("$\\bar{X} = \\$20$", "$\\bar{X} = \\$21$")
+    variant = (e.problem_md.replace("**Problem:**", "", 1).replace("49", "64").replace("$5", "$6")
+               .replace("$\\bar{X} = \\$20$", "$\\bar{X} = \\$23$").replace("95 percent", "90 percent"))   # all new numbers
     solves = [{"text": "**Given:** n=50.", "calls": ["21 + 1.96 * 5 / sqrt(50)"]}, "**Answer:** 22.39"]
     with FakeOllama(MODELS, replies=solves) as fake:
         turn = session.Turn(session.Source("typed", text=variant), index, fake.url, pace=0)

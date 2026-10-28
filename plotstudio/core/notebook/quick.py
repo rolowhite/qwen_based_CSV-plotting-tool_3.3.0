@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
-from . import calculator, lookup, ollama
+from . import calculator, lookup, ollama, solver
 
 TYPES = ("ci_mean", "ci_prop", "test_mean", "test_prop", "test_two_means", "test_paired")
 NUMBERS = ("mean", "sd", "n", "confidence", "alpha", "mu0", "successes", "proportion", "p0",
@@ -67,7 +67,7 @@ def extract(backend, problem: str) -> Optional[dict]:
     try:
         raw = backend.chat.text(backend.model, [{"role": "user", "content": f"{PROMPT}\n\nProblem:\n{problem}"}],
                                 format=SCHEMA, think=backend.think,
-                                options={"temperature": 0, "num_ctx": 4096, "num_predict": 500})
+                                options={**solver.OLLAMA_OPTIONS, "num_predict": 500})   # same num_ctx: no reload
         data = json.loads(raw)
     except (ollama.OllamaError, ValueError):
         return None

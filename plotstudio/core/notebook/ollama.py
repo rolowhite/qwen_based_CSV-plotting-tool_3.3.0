@@ -16,6 +16,7 @@ from typing import Iterator, List, Optional, Sequence, Tuple
 from urllib.parse import urlsplit
 
 DEFAULT_URL = "http://localhost:11434"
+NUM_CTX = 8192            # every request uses this context size (changing it makes Ollama reload the model)
 KEEP_ALIVE = "30m"        # Ollama unloads a model after 5 idle minutes; loading 5 GB again costs 10-40 s per first picture
 LONG_SIDE_MAX = 2000      # px: bigger pictures only cost time
 LONG_SIDE_MIN = 1200      # px: small screenshots are scaled up so small print stays readable
@@ -89,7 +90,9 @@ def models(url: str = DEFAULT_URL) -> List[Tuple[str, Tuple[str, ...]]]:
 
 def warm(url: str, model: str) -> None:
     """Load `model` into memory now (an empty request), so the first picture doesn't wait for the load."""
-    _request(url, "POST", "/api/generate", {"model": model, "keep_alive": KEEP_ALIVE}, timeout=180.0)
+    # the reader's and the solver's context size: a model loaded with another one is loaded again on first use
+    _request(url, "POST", "/api/generate", {"model": model, "keep_alive": KEEP_ALIVE, "options": {"num_ctx": NUM_CTX}},
+             timeout=180.0)
 
 
 def pick(found: Sequence[Tuple[str, Sequence[str]]], need: str, wanted: str = "", avoid: str = "") -> Optional[str]:

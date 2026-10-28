@@ -21,6 +21,7 @@ class FakeOllama:
         self.requests = []
         self.pulls = []             # models asked for with /api/pull (each is then installed)
         self.pull_delay = 0.0
+        self.generates = []         # /api/generate requests (the warm-up)
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -63,6 +64,10 @@ class FakeOllama:
                         time.sleep(fake.pull_delay)
                     fake.models[body.get("model")] = ["completion", "vision"]
                     self.wfile.write(b'{"status": "success"}\n')
+                    return
+                if self.path == "/api/generate":                 # the warm-up: load the model, no prompt
+                    fake.generates.append(body)
+                    self._json(200, {"done": True})
                     return
                 if self.path != "/api/chat":
                     self._json(404, {"error": "not found"})

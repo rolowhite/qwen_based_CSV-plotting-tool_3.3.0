@@ -18,6 +18,11 @@ FEW = 2
 SMALL = {"0", "1", "2"}
 WORDS_WHEN_FEW = 0.9
 NEAR_WORDS = 0.8     # a printed exercise number plus words this alike allow one number to be misread (a blurred digit)
+# Without a printed number: nearly the same words and most of the numbers still name the exercise. The stored answer
+# is shown with a note saying which numbers differ, and the problem is solved again with its own numbers in the
+# background (a Correction follows if that answer differs), so a textbook variant is never left with the wrong one.
+LOOSE_WORDS = 0.8
+LOOSE_NUMBERS = 0.3      # share of the read numbers' weight the exercise has (one of two misread still passes)
 
 
 def problem_numbers(text: str) -> Counter:
@@ -62,7 +67,8 @@ def differences(read: Counter, exercise: Exercise) -> str:
     """'read 0.73, the book has 0.75' for the one number that differs, '' when none does."""
     stored = problem_numbers(exercise.problem_md)
     a, b = sorted((read - stored).elements()), sorted((stored - read).elements())
-    return f"read {', '.join(a)}, the book has {', '.join(b)}" if a or b else ""
+    short = lambda xs: ", ".join(xs[:4]) + (" …" if len(xs) > 4 else "") or "nothing else"   # noqa: E731
+    return f"read {short(a)}, the book has {short(b)}" if a or b else ""
 
 
 def match_with_note(index: lookup.Index, markdown: str, label: str = "",
@@ -108,7 +114,13 @@ def match_with_note(index: lookup.Index, markdown: str, label: str = "",
         if len(same) > 1 and same[0].score - same[1].score < lookup.MARGIN:
             return None, ""
     if not same:
-        return None, ""
+        loose = [c for c in result.candidates if c.exercise.has_problem and c.word_score >= LOOSE_WORDS
+                 and (c.number_score >= LOOSE_NUMBERS or not numbers)
+                 and (printed is None or printed == c.exercise.number)]        # a printed number must agree
+        if not loose or (len(loose) > 1 and loose[0].word_score - loose[1].word_score < 0.05):
+            return None, ""
+        found = loose[0].exercise
+        return found, differences(numbers, found) or "the numbers are written differently"
     found = same[0].exercise
     return found, ("" if problem_numbers(found.problem_md) == numbers else differences(numbers, found))
 

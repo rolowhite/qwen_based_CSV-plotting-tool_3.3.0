@@ -21,21 +21,24 @@ def test_the_same_problem_is_a_hit(index):
     assert library_match.match(index, "1.1 " + MARBLES).number == "1.1"      # a typed label isn't a number
 
 
-def test_one_changed_number_is_not_given_the_stored_answer(index):
-    assert index.lookup(MARBLES.replace("7 red", "8 red")).status == "match"     # the words still match ...
-    assert library_match.match(index, MARBLES.replace("7 red", "8 red")) is None   # ... the numbers don't
-    assert library_match.match(index, MARBLES + " Use 3 draws.") is None
+def test_one_changed_number_gets_the_stored_answer_with_a_note_never_silently(index):
+    # the same words with a number read differently: the stored answer, and a note that says which number differs
+    # (the session also solves it again in the background and corrects it if the answer changes)
+    assert index.lookup(MARBLES.replace("7 red", "8 red")).status == "match"
+    found, note = library_match.match_with_note(index, MARBLES.replace("7 red", "8 red"))
+    assert found.number == "1.1" and note == "read 8, the book has 7"
+    assert library_match.match_with_note(index, MARBLES)[1] == ""                  # an exact match has no note
 
 
 def test_a_book_page_that_says_more_than_the_library_still_matches_with_its_printed_number(index):
     # the page shows the label and says more than the stored problem; the stored solution uses 0.3182
     page = MARBLES + " Give $P$ to four places, like $0.3182$."
-    assert library_match.match(index, page) is None                          # no printed number: exact only
+    assert library_match.match_with_note(index, page)[1].startswith("read 0.3182")   # no printed number: with a note
     assert library_match.match(index, page, label="1.1").number == "1.1"
     assert library_match.match(index, "1.1 " + page).number == "1.1"
     assert library_match.match(index, page, label="1.2") is None             # another printed number
-    assert library_match.match(index, MARBLES + " Use 3 draws.", label="1.1") is None     # 3: not in the solution
-    assert library_match.match(index, MARBLES.replace("7 red", "8 red")) is None             # no printed number: exact only
+    found, note = library_match.match_with_note(index, MARBLES + " Use 3 draws.", label="1.1")
+    assert found.number == "1.1" and note.startswith("read 3")                # never silent about the extra 3
     # with the printed number and the same words, one number read differently is a blurred digit: matched, and told
     blurred, note = library_match.match_with_note(index, MARBLES.replace("7 red", "8 red"), label="1.1")
     assert blurred.number == "1.1" and note == "read 8, the book has 7"
@@ -67,7 +70,8 @@ def test_the_same_words_with_other_numbers_are_told_apart_by_the_numbers(index):
     second = "The weights of six parcels are 4.1, 1.4, 5.8, 2.0, 6.6 and 0.1 kg. Find the sample mean."
     assert library_match.match(index, first).number == "2.1"
     assert library_match.match(index, second).number == "2.2"
-    assert library_match.match(index, second.replace("6.6", "6.7")) is None
+    found, note = library_match.match_with_note(index, second.replace("6.6", "6.7"))
+    assert found.number == "2.2" and note == "read 6.7, the book has 6.6"         # the numbers still pick 2.2
 
 
 def test_few_words_but_numbers_no_other_exercise_has(index):
