@@ -118,6 +118,26 @@ class LabService:
     def target(self):
         return self.app.work.current_target()
 
+    def rebase(self, ds: Dataset) -> str:
+        """The file itself was edited (Ceasar): `ds` is the new starting table. The accepted steps run on it again; if
+        they no longer can (a column they use is gone) they are dropped. Returns what was dropped, or ''."""
+        note = ""
+        self.base, self.working = ds, ds
+        if self.pipeline.steps:
+            try:
+                self.working = make_working(ds, self.pipeline, self.pipeline.transform(ds.df, train=True))
+            except Exception as exc:  # noqa: BLE001 - a step that no longer fits: say so, keep the edit
+                log_error("Feature Lab: the steps could not run on the edited table", exc)
+                self.pipeline = Pipeline()
+                note = f"The Feature Lab steps no longer fit the edited table and were removed ({exc})."
+        self.result = self.result_key = self.evaluation = self.eval_version = self.custom = None
+        self.status = (note or "The table was edited in Ceasar; the accepted features were worked out again.",
+                       "warn" if note else "muted")
+        self.app.use_working(self.working)
+        self._emit("changed")
+        self.queued = self.queued and self.job is not None
+        return note
+
     @property
     def current_evaluation(self):
         """The last evaluation if it belongs to the steps as they are now (an undo + redo is the same), else None."""
@@ -1233,7 +1253,8 @@ def _cell(value) -> str:
 class CodeDialog(tk.Toplevel):
     """The pipeline as clean.py: read-only, with Copy and Save."""
 
-    def __init__(self, view, code: str, name: str):
+    def __init__(self, view, code: str, name: str,
+                 note: str = "The accepted steps as plain pandas: it rebuilds the Lab's table from the raw file."):
         app = view.app
         super().__init__(app)
         t, px = app.theme, app.theme.px
@@ -1244,8 +1265,7 @@ class CodeDialog(tk.Toplevel):
         t.dark_title_bar(self)
         bar = tk.Frame(self, background=C["panel"])
         bar.pack(fill="x", padx=px(14), pady=(px(12), px(8)))
-        tk.Label(bar, text="The accepted steps as plain pandas: it rebuilds the Lab's table from the raw file.",
-                 background=C["panel"], foreground=C["muted"], font=t.f["small"]).pack(side="left")
+        tk.Label(bar, text=note, background=C["panel"], foreground=C["muted"], font=t.f["small"]).pack(side="left")
         ttk.Button(bar, text="Save…", style="TButton", command=self.save).pack(side="right")
         self.copy_btn = ttk.Button(bar, text="Copy", style="Accent.TButton", command=self.copy)
         self.copy_btn.pack(side="right", padx=(0, px(6)))

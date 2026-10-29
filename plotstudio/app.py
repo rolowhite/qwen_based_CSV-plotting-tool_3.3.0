@@ -42,6 +42,7 @@ from .engine import (CONTEXTS, LEGEND_PLACES, PALETTES, LabelSettings, PlotRunEr
 from .graphs import CATEGORIES, GRAPH_BY_ID, GRAPHS, compatible, suggest  # noqa: E402
 from .core import overrides as type_overrides  # noqa: E402
 from .ideas import IdeaCard, IdeaService, IdeasView  # noqa: E402
+from .ceasar import CeasarService, CeasarView  # noqa: E402
 from .featurelab import FeatureLabView, LabService  # noqa: E402
 from .log import log_error, log_path, logger  # noqa: E402
 from . import bootstrap  # noqa: E402
@@ -106,6 +107,7 @@ class App(tk.Tk):
         self.style_settings = self._saved_style()
         self.ideas = IdeaService(self)        # plot ideas for the loaded file (background thread)
         self.lab = LabService(self)           # Feature Lab: the file's feature steps (background thread)
+        self.ceasar = CeasarService(self)     # Ceasar: edits to the file made by tasks and chat
 
         self.container = ttk.Frame(self)
         self.container.pack(fill="both", expand=True)
@@ -1273,9 +1275,10 @@ class WorkspacePage(ttk.Frame):
         self.data_view = DataView(self.nb, self)
         self.ideas_view = IdeasView(self.nb, self)
         self.lab_view = FeatureLabView(self.nb, self)
+        self.ceasar_view = CeasarView(self.nb, self)
         for view, text, icon in ((self.plot_view, "Plot", "chart"), (self.code_view, "Python code", "code"),
                                  (self.data_view, "Data summary", "table"), (self.ideas_view, "Plot ideas", "sparkle"),
-                                 (self.lab_view, "Feature Lab", "flask")):
+                                 (self.lab_view, "Feature Lab", "flask"), (self.ceasar_view, "Ceasar", "chat")):
             self.nb.add(view, text=f" {text}", compound="left",
                         image=t.icon_states(icon, 16, normal="muted", active="text", selected="text"))
         self.nb.bind("<<NotebookTabChanged>>", self._tab_changed, add="+")
@@ -1617,6 +1620,8 @@ class WorkspacePage(ttk.Frame):
         try:
             if self.nb.select() == str(self.lab_view):
                 self.lab_view.on_show()
+            elif self.nb.select() == str(self.ceasar_view):
+                self.ceasar_view.on_show()
         except tk.TclError:
             pass
 

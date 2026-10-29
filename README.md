@@ -301,6 +301,32 @@ which is guessed, and the model: the steps are applied to the test file with wha
 trained on all training rows, and the file gets one prediction per ID). The exported code rebuilds exactly the table
 the app shows; the tests check this.
 
+<a id="ceasar"></a>
+**Ceasar.** The *Ceasar* tab, next to the Feature Lab, is a data-analysis assistant that runs on the local model (Ollama,
+the same one the Notebook uses). It is active once a CSV is loaded. When you open it, Ceasar looks at the file (rows,
+gaps, duplicates, numbers or dates stored as text, stray spaces, outliers; this part needs no model) and offers the
+first tasks, the ones the table calls for first: *Count missing data*, *Fill the gaps*, *Remove duplicate rows*, *Turn text
+into numbers / dates*, *Tidy stray spaces*, *Find outliers*, *Summarise every column*, *Find the strongest links*, plus
+*Suggest plots* (the Plot ideas) and *Suggest new features* (the Feature Lab). The **Tasks** menu has all of them at any time.
+
+Below the tasks is a chat. Write what you want in your own words, e.g. *make the ages 18 if their name starts with master*.
+The model writes pandas code, the code is checked and run on a **copy**, and the table on the right is replaced only if
+something really changed. The chat says how many cells changed, in which columns, shows before → after samples and the code
+that ran; the changed rows are shaded and listed first on the right. If the code fails or changes nothing the model gets
+one or two more tries, and if that fails nothing is applied. Questions (*how many ages are missing?*) are answered without
+changing the table.
+
+Everything is undoable (*Undo*, *Redo*, *Back to the file as loaded*, Ctrl+Z / Ctrl+Y outside text boxes). An edit becomes
+the new starting table for the whole app: the Data, Plot and Feature Lab tabs show it, accepted Feature Lab steps are worked
+out again on it (a step that no longer fits is removed with a note), and **Code** / *Show the code…* in the Feature Lab export
+the edits inside `read(path)`, so the script rebuilds the same table from the raw file. The file on disk is never changed;
+*Save CSV…* writes the edited table to a new file.
+
+Limits: the code is limited to `df`, `pd`, `np`, `re`, `math` (no imports, files, network, `while`, function definitions)
+and stops after 30 s, but this is a guard for a tool on your own computer, not a security boundary: cell values are shown
+to the model, so only open files you trust. A small local model can misread an instruction; that is why Ceasar shows what
+really changed and the code it ran, and why Undo is always there.
+
 The same from Python:
 
 ```python
