@@ -130,7 +130,7 @@ def test_opening_the_tab_looks_at_the_file_and_offers_starter_tasks(make_app):
         assert "426" in text and "Count missing data" in cards_text(view)
         assert "Remove duplicate rows" in cards_text(view)
         assert "Age and Cabin have gaps" in transcript(view)       # the model's own read, as an extra
-        assert "titanic_like" in view.title.cget("text")
+        assert "titanic_like" in view.file_chip.cget("text")
         assert app.errors == []
 
 
@@ -159,7 +159,7 @@ def test_the_users_sentence_changes_the_csv_everywhere(make_app):
         assert masters.sum() > 0 and (after.loc[masters, "Age"] == 18).all()
         assert after.loc[~masters].equals(before.loc[~masters]), "no other cell may change"
         assert app.dataset is app.lab.working or app.dataset.df.equals(after)      # every tab sees the new table
-        assert view.changed_rows and "cells changed" in transcript(view)
+        assert view.changed_rows and "cells changed" in cards_text(view)
         assert len(view.tree.get_children()) == len(view.changed_rows)          # the changed rows first
         assert "Age" in [view.tree.heading(c, "text").lstrip("● ") for c in view.tree["columns"][1:]]
         assert "Master" in " ".join(str(v) for v in view.tree.item(view.tree.get_children()[0], "values"))
@@ -204,7 +204,7 @@ def test_code_that_does_nothing_is_never_applied(make_app):
         app = make_app(fake.url)
         view = open_ceasar(app)
         say(app, view, "make the ages 18 if their name starts with master")
-        assert not app.ceasar.edits and "changed nothing" in transcript(view)
+        assert not app.ceasar.edits and "changed nothing" in transcript(view) + cards_text(view)
 
 
 def test_a_question_is_answered_without_changing_the_table(make_app):
@@ -292,7 +292,7 @@ def test_loading_another_file_starts_fresh(make_app, tmp_path):
     app.loader.load(str(other))
     wait(app, lambda: app.dataset is not None and app.dataset.path.name == "other.csv", 30)
     assert app.ceasar.edits == [] and app.ceasar.source.name == "other.csv"
-    assert "other.csv" in view.title.cget("text")
+    assert "other.csv" in view.file_chip.cget("text")
 
 
 def test_plot_ideas_and_theme_switch_do_not_break(make_app):
@@ -302,3 +302,47 @@ def test_plot_ideas_and_theme_switch_do_not_break(make_app):
     settle(app, 1.0)
     view.on_theme()
     assert app.errors == []
+
+
+# ------------------------------------------------------- found in review --
+def test_stop_frees_the_tab_and_the_late_result_is_dropped(make_app):
+    with FakeOllama(MODELS, replies=["n", {"text": R("change", "ok", MASTER), "delay": 1.5}]) as fake:
+        app = make_app(fake.url)
+        view = open_ceasar(app)
+        view.entry.set_value("master is 18")
+        view.send()
+        settle(app, 0.3)
+        assert app.ceasar.busy
+        app.ceasar.stop()
+        assert not app.ceasar.busy and view.send_btn.instate(["!disabled"])
+        settle(app, 2.5)
+        assert not app.ceasar.edits and app.lab.working.df["Age"].ne(18).any()
+        assert app.errors == []
+
+
+def test_a_job_still_running_when_another_file_opens_never_touches_it(make_app, tmp_path):
+    with FakeOllama(MODELS, replies=["n", {"text": R("change", "ok", MASTER), "delay": 1.5}]) as fake:
+        app = make_app(fake.url)
+        view = open_ceasar(app)
+        view.entry.set_value("master is 18")
+        view.send()
+        settle(app, 0.3)
+        other = tmp_path / "other.csv"
+        pd.DataFrame({"a": [1, 2, 3]}).to_csv(other, index=False)
+        app.loader.load(str(other))
+        wait(app, lambda: app.dataset is not None and app.dataset.path.name == "other.csv", 30)
+        settle(app, 2.5)
+        assert list(app.lab.working.df.columns) == ["a"] and not app.ceasar.edits
+        assert app.ceasar.greeted or not view.is_showing()
+        assert app.errors == []
+
+
+def test_undo_clears_the_shading_of_the_edit_it_took_back(make_app):
+    app = make_app()
+    view = open_ceasar(app)
+    run_task(app, "fill_missing")
+    assert view.changed_rows
+    app.ceasar.undo()
+    wait(app, lambda: not app.ceasar.busy)
+    assert not view.changed_rows and not view.changed_cols
+    assert not any("● " in view.tree.heading(c, "text") for c in view.tree["columns"])

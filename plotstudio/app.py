@@ -198,8 +198,6 @@ class App(tk.Tk):
             self.busy(False)
         self.cfg["ui_theme"] = mode
         settings.save(self.cfg)
-        if hasattr(self, "profile"):
-            self.profile.on_theme()
 
     def toggle_style(self):
         """Switch between the default style and the ink style (live, remembered for next time)."""
@@ -211,12 +209,8 @@ class App(tk.Tk):
             self.busy(False)
         self.cfg["ui_style"] = style
         settings.save(self.cfg)
-        if hasattr(self, "profile"):
-            self.profile.on_theme()
 
     def show(self, name):
-        if name != self.current:
-            self.previous_page = self.current
         self.current = name
         self.pages[name].tkraise()
         self.pages[name].on_show()
@@ -819,11 +813,10 @@ class LoadPage(ttk.Frame):
                 result = ("image", extract_table(path))
             except Exception as exc:  # noqa: BLE001 - shown to the user
                 result = ("error", exc)
-            if token == self._token:
-                self._result = result
+            self._result = (token, result)          # tagged: a slower, older load can't pass for this one
 
         threading.Thread(target=work, daemon=True).start()
-        self.after(80, lambda: self._poll(image_path=path))
+        self.after(80, lambda: self._poll(token, image_path=path))
 
     def load(self, path, then_plot=False):
         path = Path(path)
@@ -850,12 +843,11 @@ class LoadPage(ttk.Frame):
                 result = ("ok", load_csv(path, sep=sep, encoding=enc, header=header))
             except Exception as exc:  # noqa: BLE001 - shown to the user
                 result = ("error", exc)
-            if token == self._token:
-                self._result = result
+            self._result = (token, result)          # tagged: a slower, older load can't pass for this one
 
         gc.collect()      # free dead Tk variables HERE: Tk must not delete them from the reading thread
         threading.Thread(target=work, daemon=True).start()
-        self.after(80, self._poll)
+        self.after(80, lambda: self._poll(token))
 
     def load_pdf(self, path, password=None):
         """Read the PDF's tables in a worker thread, then open the review dialog."""
@@ -876,11 +868,10 @@ class LoadPage(ttk.Frame):
                 result = ("pdf", extract_tables(path, password=password, progress=progress))
             except Exception as exc:  # noqa: BLE001 - shown to the user
                 result = ("error", exc)
-            if token == self._token:
-                self._result = result
+            self._result = (token, result)          # tagged: a slower, older load can't pass for this one
 
         threading.Thread(target=work, daemon=True).start()
-        self.after(80, lambda: self._poll(pdf_path=path))
+        self.after(80, lambda: self._poll(token, pdf_path=path))
 
     PREVIEW_ROWS = 300      # the review grid shows this many rows; the rest are saved as read
 
@@ -1092,18 +1083,24 @@ class LoadPage(ttk.Frame):
                   f"{path.name} is protected with a password. Enter it to read its tables:")
         return simpledialog.askstring(APP_NAME, prompt, show="•", parent=self)
 
-    def _poll(self, pdf_path=None, image_path=None):
-        if self._result is None:
+    def _poll(self, token, pdf_path=None, image_path=None):
+        clipboard = image_path is not None and image_path.name.startswith("csv_plot_studio_clipboard_")
+        if token != self._token:                # a newer load took over: this one's result never comes
+            if clipboard:
+                image_path.unlink(missing_ok=True)
+            return
+        if self._result is None or self._result[0] != token:
             if getattr(self, "_progress_text", ""):
                 self.status.configure(text=self._progress_text)
-            self.after(80, lambda: self._poll(pdf_path=pdf_path, image_path=image_path))
+            self.after(80, lambda: self._poll(token, pdf_path=pdf_path, image_path=image_path))
             return
         self.progress.stop()
         self.progress.pack_forget()
         self.shortcut.pack(side="left", padx=(self.app.theme.px(12), 0))
         self.open_btn.state(["!disabled"])
         self.paste_btn.state(["!disabled"])
-        kind, value = self._result
+        kind, value = self._result[1]
+        self._result = None
         if kind in ("pdf", "image"):
             self.status.configure(text="")
             self.review_tables(pdf_path or image_path, value if kind == "pdf" else [value], kind)
@@ -1116,7 +1113,7 @@ class LoadPage(ttk.Frame):
                 else:
                     self.status.configure(text=str(value), style="Error.TLabel")
                 return
-            if image_path is not None and image_path.name.startswith("csv_plot_studio_clipboard_"):
+            if clipboard:
                 image_path.unlink(missing_ok=True)
             if pdf_path is not None or image_path is not None:
                 self.status.configure(text=str(value), style="Error.TLabel")
@@ -1282,9 +1279,12 @@ class WorkspacePage(ttk.Frame):
             self.nb.add(view, text=f" {text}", compound="left",
                         image=t.icon_states(icon, 16, normal="muted", active="text", selected="text"))
         self.nb.bind("<<NotebookTabChanged>>", self._tab_changed, add="+")
+        self.redraw_on_show = False         # the look changed while another page was showing
 
     def on_show(self):
-        pass
+        if self.redraw_on_show:
+            self.redraw_on_show = False
+            self.redraw()
 
     # ---------------------------------------------------------------- build --
     def _build_rows(self, parent):
@@ -2274,7 +2274,10 @@ class PlotView(tk.Frame):
         if self.fig is None and self.placeholder_graph is not None and self.other is not None:
             self.show_placeholder(self.placeholder_graph)
         elif self.fig is not None:
-            self.page.redraw()
+            if self.app.current == "work":
+                self.page.redraw()
+            else:
+                self.page.redraw_on_show = True     # re-running the plot code on a hidden page only slows the switch
 
     def _swap(self, widget):
         for w in self.body.winfo_children():
@@ -2688,6 +2691,15 @@ class PopoutWindow(tk.Toplevel):
         self.canvas.draw_idle()
         self.app = app
         app.theme.dark_title_bar(self)
+        self.protocol("WM_DELETE_WINDOW", self.close)
+
+    def close(self):
+        """Free the figure's picture now, on this thread (left to the garbage collector it can go from a worker)."""
+        self.tracker.disconnect()
+        self.nav.disconnect()
+        release_canvas(self.canvas)
+        plt.close(self.fig)
+        self.destroy()
 
     def save(self):
         path = filedialog.asksaveasfilename(parent=self, defaultextension=".png",

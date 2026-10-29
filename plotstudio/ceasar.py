@@ -154,15 +154,14 @@ class CeasarService:
             job["ended"] = True
         threading.Thread(target=target, daemon=True).start()
         self.emit("busy", text=text)
-        self.app.after(60, self._poll)
+        self.app.after(60, self._poll, job)
         return True
 
-    def _poll(self) -> None:
-        job = self.job
-        if job is None:
+    def _poll(self, job) -> None:
+        if job is not self.job:                 # stopped, or a new file was opened: the result is dropped
             return
-        if not job["ended"]:
-            self.app.after(80, self._poll)
+        if not job["ended"] or self.app.lab.busy:     # a Feature Lab job would put the old table back after us
+            self.app.after(80, self._poll, job)
             return
         self.job = None
         exc = job["error"]
@@ -185,21 +184,26 @@ class CeasarService:
         self.emit("idle")
 
     def stop(self) -> None:
+        """Stop now: the model is cancelled and whatever the job still returns is dropped (pandas work that is
+        already running cannot be interrupted, but it no longer holds up the tab)."""
         if self.chat is not None:
             self.chat.cancel()
+        if self.job is not None:
+            self.job = None
+            self.emit("say", text="Stopped.", muted=True)
+            self.emit("idle")
 
     # ------------------------------------------------------------------ the file --
     def profile_now(self) -> profiling.Profile:
-        key = id(self.source.df)
-        if self._profile_for != key:
-            self.profile, self._profile_for = profiling.profile(self.source.df), key
+        df = self.source.df
+        if self._profile_for is not df:
+            self.profile, self._profile_for = profiling.profile(df), df
         return self.profile
 
     def greet(self) -> None:
         """The first thing Ceasar does with a file: look at it (no model needed) and offer starter tasks."""
         if self.greeted or not self.ready:
             return
-        self.greeted = True
         name = self.source.name
 
         def work():
@@ -209,7 +213,7 @@ class CeasarService:
             self.emit("say", text=profiling.overview(p, name))
             self.emit("tasks", items=task_list.suggest(p), title="What would you like to do first?")
             self._narrate(name)
-        self._start("Looking at the file", work, done)
+        self.greeted = self._start("Looking at the file", work, done)
 
     def _narrate(self, name: str) -> None:
         """An extra: the local model's own short read of the table, if Ollama is up (never blocks anything)."""
@@ -219,7 +223,9 @@ class CeasarService:
         def go():
             try:
                 model, think = self._model()
-                box["text"] = agent.narrate(self._new_chat(), model, think, df, name, overview)
+                box["model"] = model
+                chat = ollama.Chat(self.app.cfg.get("notebook_ollama_url") or ollama.DEFAULT_URL)   # not self.chat:
+                box["text"] = agent.narrate(chat, model, think, df, name, overview)                # Stop is the user's
             except Exception:  # noqa: BLE001 - optional: no Ollama, no extra
                 box["text"] = ""
             box["done"] = True
@@ -230,7 +236,9 @@ class CeasarService:
                 return
             if not box.get("done"):
                 self.app.after(250, wait, left - 1)
-            elif box.get("text"):
+                return
+            self.emit("model", name=box.get("model"))
+            if box.get("text"):
                 self.emit("say", text=box["text"], who="Ceasar (the model's read)")
         self.app.after(250, wait)
 
@@ -241,9 +249,10 @@ class CeasarService:
 
     def _model(self):
         url = self.app.cfg.get("notebook_ollama_url") or ollama.DEFAULT_URL
-        if self._models is None or time.monotonic() - self._models[0] > 60:
-            self._models = (time.monotonic(), ollama.models(url))
-        found = self._models[1]
+        cached = self._models                   # read once: the narration thread may reset it meanwhile
+        if cached is None or time.monotonic() - cached[0] > 60:
+            cached = self._models = (time.monotonic(), ollama.models(url))
+        found = cached[1]
         name = ollama.pick(found, "completion", self.app.cfg.get("notebook_reader_model") or "", avoid="thinking")
         if name is None:
             raise ollama.NotReady("None of the models installed in Ollama can write text. Run: " + ollama.PULL_HINT)
@@ -298,15 +307,11 @@ class CeasarService:
             return
         self.emit("user", text=text)
         df, name, original, edits = self.source.df, self.source.name, self.original, list(self.edits)
-        try:
-            model, think = self._model()
-        except ollama.OllamaError as exc:
-            self.emit("problem", text=f"{exc} {OLLAMA_HINT}")
-            return
         chat = self._new_chat()
         memory = list(self.memory)
 
         def work():
+            model, think = self._model()            # asks Ollama over HTTP: never on the window's thread
             out = agent.respond(chat, model, think, df, name, text, memory, cancelled=lambda: chat.cancelled)
             new = None
             if out.kind == "change" and out.run is not None and out.diff is not None and not out.diff.nothing:
@@ -370,6 +375,7 @@ class CeasarService:
 
         def done(new):
             commit()
+            self.emit("unmark")                 # the shading belonged to the edit that was just taken back
             note = self.app.lab.rebase(new)
             self.emit("say", text=message + (f" {note}" if note else ""), muted=True)
             self.emit("table")
@@ -421,15 +427,21 @@ class CeasarView(tk.Frame):
         self.title = tk.Label(top, text="Ceasar", background=C["panel"], foreground=C["text"], font=t.f["h3"],
                               anchor="w")
         self.title.pack(side="left")
+        # the file and the model, as chips beside the name (the Figma design, page "9 · Ceasar")
+        self.file_chip = tk.Label(top, background=C["raised"], foreground=C["muted"], font=t.f["small"],
+                                  padx=px(10), pady=px(2))
+        self.model_chip = tk.Label(top, background=C["panel"], foreground=C["faint"], font=t.f["small"],
+                                   padx=px(10), pady=px(1), highlightthickness=1, highlightbackground=C["border"])
+        Tooltip(self.model_chip, "The local model Ceasar writes code with (Ollama, the same one the Notebook uses).")
         self.stop_btn = ttk.Button(top, text="Stop", style="Small.TButton", command=self.svc.stop)
-        self.subtitle = tk.Label(head, background=C["panel"], foreground=C["muted"], font=t.f["small"], anchor="w",
-                                 justify="left")
-        self.subtitle.pack(fill="x", pady=(px(4), 0))
-        self.status_row = tk.Frame(head, background=C["panel"])
-        self.progress = ttk.Progressbar(self.status_row, mode="indeterminate", length=px(180))
+        self.status_row = tk.Frame(top, background=C["panel"])
+        self.progress = ttk.Progressbar(self.status_row, mode="indeterminate", length=px(140))
         self.progress.pack(side="left")
         self.status = tk.Label(self.status_row, background=C["panel"], foreground=C["muted"], font=t.f["small"])
         self.status.pack(side="left", padx=(px(10), 0))
+        self.subtitle = tk.Label(head, background=C["panel"], foreground=C["muted"], font=t.f["small"], anchor="w",
+                                 justify="left")
+        self.subtitle.pack(fill="x", pady=(px(4), 0))
         self.bind("<Configure>", lambda e: self.subtitle.configure(wraplength=max(200, e.width - px(40))), add="+")
         tk.Frame(self, background=C["border"], height=max(1, px(1))).pack(fill="x", padx=px(16), pady=(px(6), 0))
 
@@ -452,17 +464,22 @@ class CeasarView(tk.Frame):
         t, px = self.app.theme, self.app.theme.px
         box = tk.Frame(parent, background=C["panel"])
         box.pack(side="bottom", fill="x", padx=px(8), pady=(px(6), px(4)))
-        self.entry = PlaceholderEntry(box, placeholder=PLACEHOLDER)
-        self.entry.pack(side="left", fill="x", expand=True)
-        self.entry.bind("<Return>", self.send)
-        self.send_btn = ttk.Button(box, text="Send", style="Accent.TButton", command=self.send)
-        self.send_btn.pack(side="left", padx=(px(8), 0))
-        self.tasks_btn = ttk.Menubutton(box, text="Tasks", style="TMenubutton")
+        self.chips = tk.Frame(box, background=C["panel"])       # the tasks this table needs most, one click away
+        self.chips.pack(fill="x", pady=(0, px(6)))
+        self.tasks_btn = ttk.Menubutton(self.chips, text="All tasks", style="TMenubutton")
         menu = t.menu(self.tasks_btn)
         for task in task_list.TASKS:
             menu.add_command(label=f"{task.title}  ·  {task.what}", command=lambda k=task: self.svc.run_task(k))
         self.tasks_btn["menu"] = menu
-        self.tasks_btn.pack(side="left", padx=(px(6), 0))
+        self.tasks_btn.pack(side="right")
+        self.chip_buttons: list = []
+        line = tk.Frame(box, background=C["panel"])
+        line.pack(fill="x")
+        self.entry = PlaceholderEntry(line, placeholder=PLACEHOLDER)
+        self.entry.pack(side="left", fill="x", expand=True)
+        self.entry.bind("<Return>", self.send)
+        self.send_btn = ttk.Button(line, text="Send", style="Accent.TButton", command=self.send)
+        self.send_btn.pack(side="left", padx=(px(8), 0))
         Tooltip(self.tasks_btn, "Every starter task, any time.")
         Tooltip(self.entry, "Say what you want done to the table, in your own words. Ceasar writes the pandas code, "
                             "shows it, runs it on a copy and changes the table; Undo takes it back.")
@@ -480,8 +497,9 @@ class CeasarView(tk.Frame):
     def _tags(self) -> None:
         t, px = self.app.theme, self.app.theme.px
         tg = self.text.tag_configure
-        tg("who", font=t.f["bold"], spacing1=px(12))
-        tg("me", font=t.f["bold"], foreground=C["muted"], spacing1=px(12))
+        tg("who", font=t.f["small"], spacing1=px(10))
+        tg("whoname", font=t.f["bold"])
+        tg("right", justify="right")
         tg("muted", foreground=C["muted"])
         tg("err", foreground=C["danger"])
         tg("ok", foreground=C["ok"])
@@ -494,11 +512,18 @@ class CeasarView(tk.Frame):
         head = tk.Frame(parent, background=C["panel"])
         head.pack(fill="x", padx=px(6), pady=(px(2), px(6)))
         self.table_title = tk.Label(head, background=C["panel"], foreground=C["text"], font=t.f["bold"], anchor="w")
-        self.table_title.pack(fill="x")
+        self.table_title.pack(side="left")
+        self.table_count = tk.Label(head, background=C["panel"], foreground=C["faint"], font=t.f["small"], anchor="w")
+        self.table_count.pack(side="left", padx=(px(8), 0))
+        self.mode_var = tk.StringVar(value="changed")
+        self.mode_row = tk.Frame(head, background=C["panel"])      # shown once something changed
+        for value, label in (("first", "All rows"), ("changed", "Changed rows")):
+            ttk.Radiobutton(self.mode_row, text=label, value=value, variable=self.mode_var, style="Chip.TRadiobutton",
+                            command=self._mode).pack(side="right")
         buttons = tk.Frame(parent, background=C["panel"])
         buttons.pack(fill="x", padx=px(6), pady=(0, px(6)))
         head = buttons
-        self.restore_btn = ttk.Button(head, text="Loaded file", style="Small.TButton", command=self.svc.restore)
+        self.restore_btn = ttk.Button(head, text="Back to loaded file", style="Link.TButton", command=self.svc.restore)
         self.save_btn = ttk.Button(head, text="Save CSV…", image=t.icon("download", "muted", 16), compound="left",
                                    style="Small.TButton", command=self.save_csv)
         self.code_btn = ttk.Button(head, text="Code", image=t.icon("code", "muted", 16), compound="left",
@@ -507,22 +532,17 @@ class CeasarView(tk.Frame):
                                    style="Small.TButton", command=self.svc.redo)
         self.undo_btn = ttk.Button(head, text="Undo", image=t.icon_states("undo", 16), compound="left",
                                    style="Small.TButton", command=self.svc.undo)
-        for b in (self.undo_btn, self.redo_btn, self.code_btn, self.save_btn, self.restore_btn):
+        for b in (self.undo_btn, self.redo_btn, self.restore_btn):
             b.pack(side="left", padx=(0, px(4)))
+        for b in (self.save_btn, self.code_btn):
+            b.pack(side="right", padx=(px(4), 0))
         Tooltip(self.undo_btn, "Take back the last change (Ctrl+Z)")
         Tooltip(self.redo_btn, "Do it again (Ctrl+Y)")
         Tooltip(self.restore_btn, "Back to the file as it was loaded. Redo brings the changes back one by one.")
         Tooltip(self.save_btn, "Save the table as you see it to a new CSV file. The file you opened is never changed.")
         Tooltip(self.code_btn, "The code that rebuilds this table from the file (also at the start of every plot's code).")
-        mode = tk.Frame(parent, background=C["panel"])
-        mode.pack(fill="x", padx=px(6), pady=(0, px(4)))
-        self.mode_var = tk.StringVar(value="changed")
-        self.mode_row = mode
-        for value, label in (("changed", "Changed rows first"), ("first", "First rows")):
-            ttk.Radiobutton(mode, text=label, value=value, variable=self.mode_var,
-                            command=self._mode).pack(side="left", padx=(0, px(10)))
-        self.table_note = tk.Label(mode, background=C["panel"], foreground=C["faint"], font=t.f["small"], anchor="e")
-        self.table_note.pack(side="right")
+        self.table_note = tk.Label(parent, background=C["panel"], foreground=C["faint"], font=t.f["small"], anchor="w")
+        self.table_note.pack(side="bottom", fill="x", padx=px(6), pady=(px(6), 0))
         box = ttk.Frame(parent, style="Inset.TFrame", padding=px(3))
         box.pack(fill="both", expand=True, padx=px(4))
         self.tree = ttk.Treeview(box, show="headings", selectmode="browse")
@@ -565,6 +585,8 @@ class CeasarView(tk.Frame):
         svc = self.svc
         if event == "reset":
             self._clear()
+            self._chips([])
+            self.model_chip.configure(text="○ looking for the model…", foreground=C["faint"])
             self.changed_rows, self.changed_cols = set(), set()
             self.table_mode = "changed"
             self.mode_var.set("changed")
@@ -590,6 +612,12 @@ class CeasarView(tk.Frame):
             self._changed(data)
         elif event == "table":
             self.refresh_table()
+        elif event == "model":
+            name = data.get("name")
+            self.model_chip.configure(text=f"● {name} · local" if name else "○ Ollama is not running",
+                                      foreground=C["ok"] if name else C["faint"])
+        elif event == "unmark":
+            self.changed_rows, self.changed_cols = set(), set()
         elif event == "history":
             self._state()
         elif event == "engine":
@@ -598,9 +626,9 @@ class CeasarView(tk.Frame):
     def _busy(self, busy: bool, text: str = "") -> None:
         px = self.app.theme.px
         if busy:
-            self.status_row.pack(fill="x", pady=(px(8), 0))
-            self.progress.start(14)
             self.stop_btn.pack(side="right")
+            self.status_row.pack(side="right", padx=(0, px(10)))
+            self.progress.start(14)
             self._started = time.monotonic()
             self._label = text
             self._elapsed()
@@ -626,7 +654,7 @@ class CeasarView(tk.Frame):
         self.restore_btn.state(["!disabled"] if svc.edits and not busy else ["disabled"])
         for b in (self.save_btn, self.code_btn):
             b.state(["!disabled"] if ready else ["disabled"])
-        for b in (self.send_btn, self.tasks_btn):
+        for b in (self.send_btn, self.tasks_btn, *self.chip_buttons):
             b.state(["!disabled"] if ready and not busy else ["disabled"])
         self.entry.configure(state="normal" if ready else "disabled")
         if not ready:
@@ -634,11 +662,18 @@ class CeasarView(tk.Frame):
             self.subtitle.configure(text="Open a CSV file and Ceasar looks at it, offers the first tasks (missing data, "
                                          "duplicates, types, outliers…) and changes the table when you tell it to.")
         else:
-            self.title.configure(text=f"Ceasar for {svc.source.name}")
+            self.title.configure(text="Ceasar")
             self.subtitle.configure(text="Choose a task, or write what you want done to the table. Every change is "
                                          "pandas code you can see, undo, and export.")
-        self.mode_row.pack_forget() if not self.changed_rows else self.mode_row.pack(
-            fill="x", padx=self.app.theme.px(6), pady=(0, self.app.theme.px(4)), before=self.tree.master)
+        self.mode_row.pack_forget() if not self.changed_rows else self.mode_row.pack(side="right")
+        if ready:
+            ds = svc.source
+            self.file_chip.configure(text=f"{ds.name}   {ds.shape_text}")
+            self.file_chip.pack(side="left", padx=(self.app.theme.px(12), 0))
+            self.model_chip.pack(side="left", padx=(self.app.theme.px(8), 0))
+        else:
+            self.file_chip.pack_forget()
+            self.model_chip.pack_forget()
 
     # ------------------------------------------------------------------ transcript --
     def _clear(self) -> None:
@@ -661,8 +696,29 @@ class CeasarView(tk.Frame):
         self.text.see("end")
 
     def _say(self, text: str, who: str, tag: str = "") -> None:
-        self._write(f"{who}\n", "me" if tag == "me" else "who")
-        self._write(text + "\n", *([tag] if tag and tag != "me" else []))
+        t, px = self.app.theme, self.app.theme.px
+        if tag == "me":                         # the user: a bubble on the right
+            self._write("\n", "who")
+            bubble = tk.Label(self.text, text=text, background=C["select"], foreground=C["text"], font=t.f["base"],
+                              justify="left", padx=px(12), pady=px(7), wraplength=self._wrap_width())
+            self.wraps.append(bubble)
+            self.text.configure(state="normal")
+            self.text.window_create("end", window=bubble)
+            self.text.tag_add("right", "end-2c", "end-1c")
+            self.text.insert("end", "\n", "right")
+            self.text.configure(state="disabled")
+            self.cards.append(bubble)
+            return
+        self._write("\n", "who")
+        self.text.configure(state="normal")
+        mark = tk.Label(self.text, text="C", background=C["accent"], foreground=C["on_accent"], font=t.f["bold"],
+                        width=2, padx=0, pady=0)
+        self.cards.append(mark)
+        self.text.window_create("end", window=mark, align="center", padx=px(0))
+        self.text.configure(state="disabled")
+        self._write(f"  {who}\n", "whoname")
+        if text:
+            self._write(text + "\n", *([tag] if tag else []))
 
     def _embed(self, widget) -> None:
         self.cards.append(widget)
@@ -671,18 +727,22 @@ class CeasarView(tk.Frame):
         self.text.insert("end", "\n")
         self.text.configure(state="disabled")
         self.text.see("end")
+        self.text.after_idle(lambda: self.text.see("end"))      # once the card has its size
+
+    def _wrap_width(self, width=None) -> int:
+        return max(200, (width or self.text.winfo_width()) - self.app.theme.px(80))
 
     def _rewrap(self, event=None) -> None:
-        width = max(200, (event.width if event else self.text.winfo_width()) - self.app.theme.px(80))
+        width = self._wrap_width(event.width if event else None)
         for label in list(self.wraps):
             try:
-                label.configure(wraplength=width)
+                label.configure(wraplength=width // 2 - self.app.theme.px(30) if getattr(label, "half", False)
+                                else width)
             except tk.TclError:
                 self.wraps.remove(label)
 
     def _wrapped(self, parent, text: str) -> ttk.Label:
-        label = ttk.Label(parent, text=text, style="Raised.Muted.TLabel", justify="left",
-                          wraplength=max(200, self.text.winfo_width() - self.app.theme.px(80)))
+        label = ttk.Label(parent, text=text, style="Raised.Muted.TLabel", justify="left", wraplength=self._wrap_width())
         self.wraps.append(label)
         return label
 
@@ -692,15 +752,31 @@ class CeasarView(tk.Frame):
 
     def _task_rows(self, items, title: str) -> None:
         px = self.app.theme.px
-        card = self._card()
-        ttk.Label(card, text=title, style="Raised.Bold.TLabel").pack(anchor="w")
-        for task, why in items:
-            row = ttk.Frame(card, style="Well.TFrame")
-            row.pack(fill="x", pady=(px(8), 0))
-            ttk.Button(row, text=task.title, style="Small.TButton",
+        self._write(title + "\n", "small")
+        grid = tk.Frame(self.text, background=C["panel"])
+        two = self.text.winfo_width() >= px(600)          # two cards a row when the chat is wide enough
+        grid.columnconfigure((0, 1) if two else 0, weight=1, uniform="task")
+        for i, (task, why) in enumerate(items):
+            cell = ttk.Frame(grid, style="Well.TFrame", padding=(px(12), px(10)))
+            cell.grid(row=i // 2 if two else i, column=i % 2 if two else 0, sticky="nsew", padx=(0, px(8)),
+                      pady=(0, px(8)))
+            ttk.Button(cell, text=task.title, style="Small.TButton",
                        command=lambda k=task: self.svc.run_task(k)).pack(anchor="w")
-            self._wrapped(row, why or task.what).pack(anchor="w", pady=(px(2), 0))
-        self._embed(card)
+            label = self._wrapped(cell, why or task.what)
+            label.pack(anchor="w", pady=(px(4), 0))
+            label.half = two
+        self._embed(grid)
+        self._chips([task for task, why in items if why][:2])
+
+    def _chips(self, items) -> None:
+        for b in self.chip_buttons:
+            b.destroy()
+        self.chip_buttons = []
+        for task in items:
+            b = ttk.Button(self.chips, text=task.title, style="Small.TButton", command=lambda k=task: self.svc.run_task(k))
+            b.pack(side="left", padx=(0, self.app.theme.px(6)))
+            self.chip_buttons.append(b)
+        self._state()
 
     def _code_block(self, code: str) -> None:
         lines = code.strip().split("\n")
@@ -721,14 +797,42 @@ class CeasarView(tk.Frame):
             self._code_block(data["code"])
 
     def _changed(self, data: dict) -> None:
+        t, px = self.app.theme, self.app.theme.px
         edit, d, note = data["edit"], data["diff"], data.get("note", "")
-        self._write(f"\n✔ {d.summary()}\n", "ok", "who")
+        card = self._card()
+        head = tk.Frame(card, background=C["raised"])
+        head.pack(fill="x")
+        tk.Label(head, text="✔ " + d.summary(), background=C["raised"], foreground=C["ok"], font=t.f["bold"],
+                 justify="left", anchor="w").pack(side="left")
         for label, column, before, after in d.samples[:4]:
-            self._write(f"   row {label}, {column}: {cell_text(before)} → {cell_text(after)}\n", "small")
+            tk.Label(card, text=f"row {label}   {column}   {cell_text(before)}  →  {cell_text(after)}",
+                     background=C["raised"], foreground=C["muted"], font=t.f["mono"], anchor="w").pack(fill="x")
         if note:
-            self._write(note + "\n", "err")
-        self._write("the code I ran\n", "small")
-        self._code_block(edit.code)
+            self._wrapped(card, note).configure(foreground=C["danger"])
+            card.winfo_children()[-1].pack(fill="x", pady=(px(4), 0))
+        lines = edit.code.strip().split("\n")
+        code = tk.Label(card, text="\n".join(lines[:14] + ([f"# … {len(lines) - 14} more lines"] if len(lines) > 14 else [])),
+                        background=C["field"], foreground=C["text"], font=t.f["mono"], justify="left", anchor="w",
+                        padx=px(8), pady=px(6), wraplength=self._wrap_width())
+        self.wraps.append(code)
+        acts = tk.Frame(card, background=C["raised"])
+        acts.pack(fill="x", pady=(px(8), 0))
+        undo = ttk.Button(acts, text="Undo", style="Small.TButton", command=self.svc.undo)
+        undo.pack(side="left")
+        Tooltip(undo, "Take back the last change")
+
+        def toggle(btn):
+            if code.winfo_manager():
+                code.pack_forget()
+                btn.configure(text="Show code")
+            else:
+                code.pack(fill="x", pady=(px(8), 0))
+                btn.configure(text="Hide code")
+        show = ttk.Button(acts, text="Hide code", style="Link.TButton")
+        show.configure(command=lambda: toggle(show))
+        show.pack(side="left", padx=(px(8), 0))
+        code.pack(fill="x", pady=(px(8), 0))         # shown at first: the user sees what ran
+        self._embed(card)
         self.changed_rows = set(d.changed_rows) if d.rows_after >= d.rows_before else set()
         self.changed_cols = set(d.by_column) | set(d.cols_added)
         self.table_mode = "changed"
@@ -752,8 +856,8 @@ class CeasarView(tk.Frame):
             return
         df = ds.df
         edits = len(self.svc.edits)
-        self.table_title.configure(text=f"{ds.shape_text}" + (f"  ·  {edits} change{'s' if edits != 1 else ''}"
-                                                            if edits else ""))
+        self.table_title.configure(text=ds.shape_text)
+        self.table_count.configure(text=f"{edits} change{'s' if edits != 1 else ''}" if edits else "")
         names = [str(c) for c in df.columns[:TABLE_COLUMNS]]
         self.tree.configure(columns=["#"] + list(range(len(names))))
         self.tree.heading("#", text="#", anchor="w")

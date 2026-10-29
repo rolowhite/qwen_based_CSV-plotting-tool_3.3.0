@@ -376,17 +376,33 @@ class Theme:
         bg_map = {self._norm(old[k]): C[k] for k in WIDGET_BG_KEYS}
         fg_map = {self._norm(old[k]): C[k] for k in WIDGET_FG_KEYS}
 
+        known = {}                  # widget class -> the colour options it has (asking for a missing one is slow)
+
         def recolor(w):
             if getattr(w, "fixed_colors", False):
                 return
-            for options, mapping in ((BG_OPTIONS, bg_map), (FG_OPTIONS, fg_map)):
-                for opt in options:
-                    try:
-                        value = w.cget(opt)
-                    except (tk.TclError, AttributeError, ValueError):
-                        continue
-                    new = mapping.get(self._norm(value))
-                    if new is not None:
+            cls = w.winfo_class()
+            if cls not in known:
+                try:
+                    keys = set(w.keys())
+                except (tk.TclError, AttributeError):
+                    keys = set()
+                known[cls] = [(o, bg_map) for o in BG_OPTIONS if o in keys] + [(o, fg_map) for o in FG_OPTIONS
+                                                                                if o in keys]
+            changes = {}
+            for opt, mapping in known[cls]:
+                try:
+                    value = w.cget(opt)
+                except (tk.TclError, AttributeError, ValueError):
+                    continue
+                new = mapping.get(self._norm(value))
+                if new is not None:
+                    changes[opt] = new
+            if changes:
+                try:
+                    w.configure(**changes)
+                except tk.TclError:
+                    for opt, new in changes.items():
                         try:
                             w.configure(**{opt: new})
                         except tk.TclError:

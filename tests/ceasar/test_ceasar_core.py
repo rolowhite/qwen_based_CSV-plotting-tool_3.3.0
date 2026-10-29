@@ -246,3 +246,28 @@ def test_cell_values_with_instructions_cannot_do_harm(titanic):
     chat = FakeChat(reply("change", "x", "import os\nos.system('echo hi')"), reply("chat", "I cannot do that."))
     out = respond(chat, evil)
     assert out.run is None and out.kind == "chat"
+
+
+# ------------------------------------------------------- found in review --
+@pytest.mark.parametrize("code", ["df.to_string('x.txt')", "w = pd.ExcelWriter('x.xlsx')", "s = pd.HDFStore('x.h5')"])
+def test_sandbox_refuses_other_ways_to_write_files(code):
+    with pytest.raises(sandbox.CodeRefused):
+        sandbox.check(code)
+
+
+def test_diff_sees_filled_gaps_in_nullable_columns_and_new_categories():
+    a = pd.DataFrame({"i": pd.array([1, None, 3], dtype="Int64"), "s": pd.array(["a", None, "c"], dtype="string")})
+    b = a.fillna({"i": 2, "s": "b"})
+    assert differ.diff_frames(a, b).cells == 2
+    c = pd.DataFrame({"k": pd.Categorical(["x", None, "y"])})
+    d = c.copy()
+    d["k"] = d["k"].cat.add_categories(["z"]).fillna("z")
+    assert differ.diff_frames(c, d).cells == 1
+
+
+def test_tidy_spaces_keeps_numbers_in_a_mixed_column():
+    df = pd.DataFrame({"m": ["  a ", 5, "b  c", 7.5] * 3})
+    p = profiling.profile(df)
+    assert p.messy_text == ["m"]
+    out = sandbox.run(df, tasks.BY_ID["trim_text"].code(p)).df
+    assert list(out["m"][:4]) == ["a", 5, "b c", 7.5]

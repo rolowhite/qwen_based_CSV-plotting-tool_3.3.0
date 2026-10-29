@@ -33,6 +33,8 @@ class ProfilePage(ttk.Frame):
         px = app.theme.px
         self.range_var = tk.StringVar(value="Year")
         self._images = {}
+        self._sizes = {}                 # placed control -> (width, height)
+        self._drawn = None               # what the canvas shows: (width, summary, profile)
         self._width = 0
         self._pending = None
 
@@ -116,8 +118,7 @@ class ProfilePage(ttk.Frame):
 
     def _place(self, widget, base, x, y, card, anchor="nw"):
         """Put a real ttk control on the canvas, its transparent corners in the card colour at that height."""
-        widget.update_idletasks()
-        h = widget.winfo_reqheight()
+        h = self._size(widget)[1]
         middle = y + (h // 2 if anchor.startswith("n") else 0 if anchor in ("e", "w", "center") else -h // 2)
         cy, ch, top, bottom = card
         colour = mix(top, bottom, min(1.0, max(0.0, (middle - cy) / max(1, ch))))
@@ -150,8 +151,14 @@ class ProfilePage(ttk.Frame):
 
     def _window(self, widget, x, y, anchor="nw"):
         self.canvas.create_window(x, y, window=widget, anchor=anchor)
-        widget.update_idletasks()
-        return widget.winfo_reqwidth(), widget.winfo_reqheight()
+        return self._size(widget)
+
+    def _size(self, widget):
+        """The control's size, measured once per look: update_idletasks redraws the whole window, which is slow."""
+        if widget not in self._sizes:
+            widget.update_idletasks()
+            self._sizes[widget] = widget.winfo_reqwidth(), widget.winfo_reqheight()
+        return self._sizes[widget]
 
     # ------------------------------------------------------------------------ pages --
     def on_show(self):
@@ -163,9 +170,12 @@ class ProfilePage(ttk.Frame):
 
     def on_theme(self):
         self._images.clear()
+        self._sizes.clear()
+        self._drawn = None
         refresh_profile_buttons(self.app)
         self.chips.configure(background=C["panel"])
-        self.refresh()
+        if self.app.current == "profile":           # hidden: on_show draws it in the new look
+            self.refresh()
 
     def _resized(self, event):
         if event.width > 1 and abs(event.width - self._width) >= 8:
@@ -179,10 +189,15 @@ class ProfilePage(ttk.Frame):
         width = self.canvas.winfo_width()
         if width <= 1:
             return
+        summary = summarize_dashboard(self.app.cfg, range_mode=self.range_var.get())
+        drawn = (width, summary, repr(self._profile()))
+        if drawn == self._drawn:
+            return                      # nothing on it changed since it was drawn: redrawing takes ~0.3 s
+        self._drawn = drawn
         top = self.canvas.yview()[0]
         self.canvas.delete("all")
         self.canvas.configure(background=C["bg"])
-        self.summary = summarize_dashboard(self.app.cfg, range_mode=self.range_var.get())
+        self.summary = summary
         height = self._render(width)
         self.canvas.configure(scrollregion=(0, 0, width, height))
         self.canvas.yview_moveto(top)

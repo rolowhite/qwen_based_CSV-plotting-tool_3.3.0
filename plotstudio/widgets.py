@@ -2,7 +2,9 @@
 foldable sections and the ball slider."""
 from __future__ import annotations
 
+import math
 import sys
+import time
 import tkinter as tk
 from tkinter import ttk
 
@@ -19,15 +21,23 @@ WHEEL_STEP = 64     # pixels per wheel notch (at 100 %)
 class SmoothScroller:
     """Eased scrolling for a Canvas (or a Text): each wheel notch glides instead of jumping.
 
-    The view moves 30 % of the remaining distance every frame (about 60 frames a second),
-    so it starts fast and settles softly; new notches add to where it is heading.
+    The view covers a share of the remaining distance that grows with the time since the last frame, so it
+    starts fast, settles softly and always arrives in about 0.15 s: a slow frame (a page full of widgets on
+    Windows) jumps further instead of making the glide drag. New notches add to where it is heading.
     """
+    EASE = 0.03             # seconds: the remaining distance shrinks by e every EASE
 
     def __init__(self, widget):
         self.w = widget
         self.target = None      # Canvas: wanted top, in pixels
         self.left = 0.0         # Text: pixels still to scroll
         self.job = None
+        self.last = 0.0
+
+    def _share(self) -> float:
+        now = time.monotonic()
+        dt, self.last = min(0.2, now - self.last), now
+        return 1.0 - math.exp(-dt / self.EASE)
 
     def _metrics(self):
         w = self.w
@@ -43,8 +53,11 @@ class SmoothScroller:
             start = self.target if self.job is not None and self.target is not None else self.w.canvasy(0)
             self.target = min(max(0.0, start + pixels), total - view)
         else:
+            if self.left and (pixels > 0) != (self.left > 0):
+                self.left = 0.0             # turned around: drop what was left of the other way
             self.left += pixels
         if self.job is None:
+            self.last = time.monotonic()
             self.job = self.w.after(8, self._step)
 
     def _step(self):
@@ -60,21 +73,22 @@ class SmoothScroller:
                     self.w.yview_moveto(self.target / total)
                     self.target = None
                     return
-                step = diff * 0.3
+                step = diff * self._share()
                 if abs(step) < 1:
                     step = 1 if diff > 0 else -1
                 self.w.yview_moveto((current + step) / total)
             else:
-                if abs(self.left) < 1:
-                    self.left = 0.0
+                first, last = self.w.yview()
+                if abs(self.left) < 1 or (self.left < 0 and first <= 0) or (self.left > 0 and last >= 1):
+                    self.left = 0.0     # arrived, or at the top / bottom: notches past the end don't pile up
                     return
-                step = self.left * 0.3
+                step = self.left * self._share()
                 step = int(step) if abs(step) >= 1 else (1 if self.left > 0 else -1)
                 self.left -= step
                 self.w.yview_scroll(step, "pixels")
         except tk.TclError:
             return
-        self.job = self.w.after(14, self._step)
+        self.job = self.w.after(12, self._step)
 
 
 class AutoScrollbar(ttk.Scrollbar):

@@ -110,6 +110,7 @@ class LabService:
         """A newly loaded file: no steps yet."""
         self.base = self.working = ds
         self.pipeline = Pipeline()
+        self.job, self.queued = None, False         # a job still running belongs to the previous file: dropped
         self.result = self.result_key = self.evaluation = self.eval_version = self.custom = None
         self.skipped = set()
         self.status = ("", "muted")
@@ -171,17 +172,16 @@ class LabService:
         threading.Thread(target=run, daemon=True).start()
         self.progress = (0.0, text)
         self._emit("start")
-        self.app.after(60, self._poll)
+        self.app.after(60, self._poll, job)
         return True
 
-    def _poll(self) -> None:
-        job = self.job
-        if job is None:
+    def _poll(self, job) -> None:
+        if job is not self.job:
             return
         if not job["ended"]:
             self.progress = job["progress"]
             self._emit("progress")
-            self.app.after(80, self._poll)
+            self.app.after(80, self._poll, job)
             return
         self.job = None
         if job["error"] is not None:
@@ -432,6 +432,7 @@ class FeatureLabView(tk.Frame):
         self.skip_buttons: dict = {}
         self.chips: list = []
         self.show_skipped = False
+        self._filled = None              # the result the list shows now
         self.preview_canvases: list = []
         self._redraw_pending = False
         self._split_done = False              # the list gets ~57 % of the width once
@@ -612,8 +613,12 @@ class FeatureLabView(tk.Frame):
 
     def on_show(self) -> None:
         """The tab was opened: find features if they aren't there yet."""
-        if self.svc.working is not None:
-            self.svc.suggest()
+        svc = self.svc
+        if svc.working is None:
+            return
+        if svc.result is not None and svc.result is self._filled and svc.result_key == svc.key():
+            return                  # already on screen: rebuilding the list and its preview plots is slow
+        svc.suggest()
 
     def on_target(self) -> None:
         if self.is_showing() and self.svc.working is not None:
@@ -623,6 +628,7 @@ class FeatureLabView(tk.Frame):
 
     # ------------------------------------------------------------------ list --
     def _clear(self) -> None:
+        self._filled = None
         for w in self.body.winfo_children():
             w.destroy()
         self.wraps = []
@@ -697,6 +703,7 @@ class FeatureLabView(tk.Frame):
             self._encodings(res.encodings)
         self._formula_box()
         tk.Frame(self.body, background=C["panel"], height=px(16)).pack()
+        self._filled = res
         self._rewrap()
         self.after_idle(lambda: self.scroll.canvas.yview_moveto(top))
         if self.selected is not None:

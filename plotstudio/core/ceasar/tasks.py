@@ -89,8 +89,8 @@ def _dates(p: Profile) -> str:
 
 
 def _trim(p: Profile) -> str:
-    return "\n".join(f'df[{c!r}] = df[{c!r}].str.strip().str.replace(r"\\s+", " ", regex=True)'
-                     for c in p.messy_text) + "\n"
+    return "\n".join(f'df[{c!r}] = df[{c!r}].map(lambda v: re.sub(r"\\s+", " ", v).strip() if isinstance(v, str) '
+                     'else v)' for c in p.messy_text) + "\n"
 
 
 TASKS: List[Task] = [

@@ -71,7 +71,8 @@ def diff_frames(before: pd.DataFrame, after: pd.DataFrame) -> Diff:
         return d
     if not common or len(rows) == 0:
         return d
-    different = a.ne(b) & ~(a.isna() & b.isna())
+    a, b = a.astype(object), b.astype(object)              # categories that changed, nullable <NA>: plain values
+    different = (a.ne(b) & ~(a.isna() & b.isna())).fillna(True).astype(bool)
     d.by_column = {c: int(n) for c, n in different.sum().items() if n}
     d.cells = int(sum(d.by_column.values()))
     any_row = different.any(axis=1)

@@ -605,7 +605,8 @@ class NotebookPage(ttk.Frame):
         self.page_label.pack(side="left", padx=px(4))
         ttk.Button(top, image=t.icon_states("chevron_right", 16), style="Icon.TButton",
                    command=lambda: self.show_pdf_page(self.pdf_index + 1)).pack(side="left")
-        close = ttk.Button(top, image=t.icon_states("close", 16), style="Icon.TButton", command=self._close_pdf)
+        self.pdf_close_btn = close = ttk.Button(top, image=t.icon_states("close", 16), style="Icon.TButton",
+                                                command=self._close_pdf)
         close.pack(side="right")
         Tooltip(close, "Close the PDF")
         self.canvas = tk.Canvas(self.picker, height=px(260), background=C["field"], highlightthickness=1,
@@ -1282,7 +1283,7 @@ class NotebookPage(ttk.Frame):
         self.set_status("")
 
     def _busy(self, busy):
-        for b in (self.send_btn, self.open_btn, self.paste_btn, self.solve_btn):
+        for b in (self.send_btn, self.open_btn, self.paste_btn, self.solve_btn, self.pdf_close_btn):   # a turn reads the PDF
             b.state(["disabled"] if busy else ["!disabled"])
         if busy:
             self.stop_btn.pack(side="right", padx=(self.app.theme.px(8), 0))

@@ -307,7 +307,7 @@ the same one the Notebook uses). It is active once a CSV is loaded. When you ope
 gaps, duplicates, numbers or dates stored as text, stray spaces, outliers; this part needs no model) and offers the
 first tasks, the ones the table calls for first: *Count missing data*, *Fill the gaps*, *Remove duplicate rows*, *Turn text
 into numbers / dates*, *Tidy stray spaces*, *Find outliers*, *Summarise every column*, *Find the strongest links*, plus
-*Suggest plots* (the Plot ideas) and *Suggest new features* (the Feature Lab). The **Tasks** menu has all of them at any time.
+*Suggest plots* (the Plot ideas) and *Suggest new features* (the Feature Lab). The two the table needs most sit as buttons above the chat box, and **All tasks** lists every one at any time. The header shows the file and whether the local model is running.
 
 Below the tasks is a chat. Write what you want in your own words, e.g. *make the ages 18 if their name starts with master*.
 The model writes pandas code, the code is checked and run on a **copy**, and the table on the right is replaced only if
@@ -316,7 +316,7 @@ that ran; the changed rows are shaded and listed first on the right. If the code
 one or two more tries, and if that fails nothing is applied. Questions (*how many ages are missing?*) are answered without
 changing the table.
 
-Everything is undoable (*Undo*, *Redo*, *Back to the file as loaded*, Ctrl+Z / Ctrl+Y outside text boxes). An edit becomes
+Everything is undoable (*Undo*, *Redo*, *Back to loaded file*, Ctrl+Z / Ctrl+Y outside text boxes); *Stop* frees the tab at once. An edit becomes
 the new starting table for the whole app: the Data, Plot and Feature Lab tabs show it, accepted Feature Lab steps are worked
 out again on it (a step that no longer fits is removed with a note), and **Code** / *Show the code…* in the Feature Lab export
 the edits inside `read(path)`, so the script rebuilds the same table from the raw file. The file on disk is never changed;

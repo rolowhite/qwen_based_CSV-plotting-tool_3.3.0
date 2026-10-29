@@ -37,7 +37,7 @@ BAD_ATTRS = {"to_csv", "to_pickle", "to_excel", "to_sql", "to_parquet", "to_json
              "eval", "load", "save", "savez", "savez_compressed", "savetxt", "loadtxt", "genfromtxt", "fromfile",
              "tofile", "memmap", "ctypeslib", "lib", "f2py", "distutils", "testing", "io", "compat", "os", "sys",
              "subprocess", "builtins", "format_map", "system", "popen", "importlib", "api_extension", "plotting",
-             "style", "read_clipboard"}
+             "style", "read_clipboard", "to_string", "ExcelWriter", "HDFStore", "ExcelFile", "dump", "tofile"}
 BAD_NODES = (ast.Import, ast.ImportFrom, ast.While, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Global,
              ast.Nonlocal, ast.With, ast.AsyncWith, ast.Await, ast.Yield, ast.YieldFrom, ast.AsyncFor)
 SAFE_BUILTINS = {name: getattr(_b, name) for name in (

@@ -126,7 +126,8 @@ class Navigator:
                               ("<KP_Add>", lambda e: self._key_zoom(WHEEL_ZOOM)),
                               ("<minus>", lambda e: self._key_zoom(1 / WHEEL_ZOOM)),
                               ("<KP_Subtract>", lambda e: self._key_zoom(1 / WHEEL_ZOOM)),
-                              ("<Key-0>", lambda e: self.reset()), ("<Home>", lambda e: self.reset())):
+                              ("<Key-0>", lambda e: self._active() and self.reset()),
+                              ("<Home>", lambda e: self._active() and self.reset())):
                 widget.bind(seq, lambda e, f=func: (f(e), "break")[1], add="+")
 
     # ------------------------------------------------------------------ #
